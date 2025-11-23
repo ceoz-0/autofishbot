@@ -11,19 +11,14 @@ use anyhow::Result;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 
-mod config;
-mod discord;
-mod engine;
-mod tui;
-
-use crate::config::Config;
-use crate::tui::app::App;
-use crate::tui::ui;
-use crate::tui::events;
-use crate::discord::gateway::Gateway;
-use crate::discord::types::GatewayPayload;
-use crate::discord::client::DiscordClient;
-use crate::engine::bot::Bot;
+use autofishbot_rs::config::Config;
+use autofishbot_rs::tui::app::App;
+use autofishbot_rs::tui::ui;
+use autofishbot_rs::tui::events;
+use autofishbot_rs::discord::gateway::Gateway;
+use autofishbot_rs::discord::types::GatewayPayload;
+use autofishbot_rs::discord::client::DiscordClient;
+use autofishbot_rs::engine::bot::Bot;
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -129,22 +124,9 @@ async fn run_app<B: ratatui::backend::Backend>(terminal: &mut Terminal<B>, app: 
         }
 
         // Handle input
-        // event::read blocks, so we need to be careful if we want async updates.
-        // poll allows us to check for events without blocking forever.
-
-        // However, `events::handle_events` uses `event::read` which is blocking but checked with `poll`.
-        // But since this is an async function, blocking here blocks the executor?
-        // No, `event::read` blocks the thread. `tokio::main` runs on a thread pool.
-        // But `run_app` is awaited in main.
-
-        // Ideally we run input handling in a separate task or use `tokio::task::spawn_blocking`?
-        // Or just use a short poll timeout. `handle_events` uses 100ms poll.
-
         {
              let mut app_guard = app.lock().await;
              events::handle_events(&mut app_guard)?;
         }
-
-        // Sleep a bit to yield? polling does that.
     }
 }

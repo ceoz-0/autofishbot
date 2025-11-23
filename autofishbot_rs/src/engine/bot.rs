@@ -2,6 +2,7 @@ use crate::config::Config;
 use crate::discord::client::DiscordClient;
 use crate::engine::captcha::Captcha;
 use crate::engine::scheduler::Scheduler;
+use crate::engine::cooldown::CooldownManager;
 use log::{info, warn};
 use std::sync::Arc;
 use tokio::sync::Mutex;
@@ -10,6 +11,8 @@ use rand::Rng;
 
 use crate::tui::app::App;
 
+use crate::discord::types::ApplicationCommand;
+
 pub struct Bot {
     config: Config,
     client: Arc<DiscordClient>,
@@ -17,6 +20,8 @@ pub struct Bot {
     captcha: Arc<Mutex<Captcha>>,
     app_state: Arc<Mutex<App>>,
     state: BotState,
+    fish_command: Option<ApplicationCommand>,
+    pub cooldown_manager: Arc<Mutex<CooldownManager>>,
 }
 
 #[derive(Debug, PartialEq)]
@@ -31,6 +36,7 @@ impl Bot {
     pub fn new(config: Config, client: Arc<DiscordClient>, app_state: Arc<Mutex<App>>) -> Self {
         let scheduler = Arc::new(Mutex::new(Scheduler::new(config.clone())));
         let captcha = Arc::new(Mutex::new(Captcha::new(config.clone())));
+        let cooldown_manager = Arc::new(Mutex::new(CooldownManager::new(config.system.user_cooldown)));
 
         Self {
             config,
@@ -39,6 +45,8 @@ impl Bot {
             captcha,
             app_state,
             state: BotState::Idle,
+            fish_command: None,
+            cooldown_manager,
         }
     }
 
@@ -91,22 +99,37 @@ impl Bot {
                     }
 
                     // Fish command
-                     let _ = self.client.send_command(&self.config.system.channel_id.to_string(), &self.config.system.channel_id.to_string(),
-                        &crate::discord::types::ApplicationCommand {
-                            id: "0".to_string(),
-                            application_id: "574652751745777665".to_string(),
-                            version: "0".to_string(),
-                            default_permission: None,
-                            default_member_permissions: None,
-                            r#type: 1,
-                            name: "fish".to_string(),
-                            description: "".to_string(),
-                            guild_id: None
-                        }, None).await;
+                    let guild_id = "1273750160022835301"; // Hardcoded for test
 
-                    // Sleep random amount
-                    let sleep_time = self.config.system.user_cooldown + rand::thread_rng().gen_range(0.5..2.0);
-                    tokio::time::sleep(Duration::from_secs_f64(sleep_time)).await;
+                    if self.fish_command.is_none() {
+                        match self.client.get_command(guild_id, "fish").await {
+                            Ok(Some(cmd)) => {
+                                info!("Found fish command: {:?}", cmd);
+                                self.fish_command = Some(cmd);
+                            },
+                            Ok(None) => {
+                                log::error!("Could not find 'fish' command in guild");
+                            },
+                            Err(e) => {
+                                log::error!("Failed to fetch commands: {}", e);
+                            }
+                        }
+                    }
+
+                    if let Some(cmd) = &self.fish_command {
+                         if let Err(e) = self.client.send_command(guild_id, &self.config.system.channel_id.to_string(), cmd, None).await {
+                            log::error!("Failed to send fish command: {}", e);
+                        }
+                    }
+
+                    // Sleep random amount using Dynamic Cooldown Manager
+                    let sleep_duration = {
+                        let manager = self.cooldown_manager.lock().await;
+                        manager.get_sleep_time()
+                    };
+
+                    info!("Sleeping for {:.2}s", sleep_duration.as_secs_f64());
+                    tokio::time::sleep(sleep_duration).await;
                 },
                 BotState::Captcha => {
                     // Handled by event listener triggering solver

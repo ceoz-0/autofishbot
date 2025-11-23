@@ -5,6 +5,7 @@ use crate::config::Config;
 use crate::discord::types::ApplicationCommand;
 use log::{error, info, debug};
 use std::time::Duration;
+use base64::{Engine as _, engine::general_purpose};
 
 pub struct DiscordClient {
     client: Client,
@@ -45,6 +46,12 @@ impl DiscordClient {
             config,
             application_id,
         })
+    }
+
+    // Add get_commands_search to find commands by name
+    pub async fn get_command(&self, guild_id: &str, name: &str) -> Result<Option<ApplicationCommand>> {
+        let commands = self.get_commands(guild_id).await?;
+        Ok(commands.into_iter().find(|c| c.name == name))
     }
 
     pub async fn get_commands(&self, guild_id: &str) -> Result<Vec<ApplicationCommand>> {
@@ -106,13 +113,46 @@ impl DiscordClient {
         // "session.join(choice(ascii_letters + digits) for _ in range(32))"
         // So we can generate one here if needed or pass it in.
 
-        // Wait, we need a valid session ID? The python code says:
-        // "Generates user session" locally. So it doesn't seem to be the gateway session id?
-        // Let's double check.
+        // Generate random session ID (32 chars)
+        use rand::distributions::Alphanumeric;
+        use rand::{thread_rng, Rng};
+        let session_id: String = thread_rng()
+            .sample_iter(&Alphanumeric)
+            .take(32)
+            .map(char::from)
+            .collect();
+
+        let mut payload_value = payload;
+        if let Some(obj) = payload_value.as_object_mut() {
+            obj.insert("session_id".to_string(), json!(session_id));
+        }
+
+        let super_properties = json!({
+            "os": "Windows",
+            "browser": "Chrome",
+            "device": "",
+            "system_locale": "en-US",
+            "browser_user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/103.0.0.0 Safari/537.36",
+            "browser_version": "103.0.0.0",
+            "os_version": "10",
+            "referrer": "",
+            "referring_domain": "",
+            "referrer_current": "",
+            "referring_domain_current": "",
+            "release_channel": "stable",
+            "client_build_number": 134900,
+            "client_event_source": null
+        });
+
+        let super_properties_str = super_properties.to_string();
+        let super_properties_base64 = general_purpose::STANDARD.encode(super_properties_str);
 
         let res = self.client.post(url)
             .header("Authorization", &self.token)
-            .json(&payload)
+            .header("x-super-properties", super_properties_base64)
+            .header("origin", "https://discord.com")
+            .header("referer", "https://discord.com/channels/@me") // Or specific channel
+            .json(&payload_value)
             .send()
             .await?;
 

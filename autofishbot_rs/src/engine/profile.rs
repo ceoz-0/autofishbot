@@ -7,6 +7,7 @@ pub struct Profile {
     pub level: String,
     pub rod: String,
     pub biome: String,
+    pub current_biome: Option<String>, // Added for persistent tracking
     pub pet: String,
     pub bait: String,
     pub inventory_value: String,

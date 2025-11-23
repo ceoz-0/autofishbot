@@ -124,56 +124,91 @@ impl Scheduler {
         if let Some(mut task) = tasks_to_run.pop() {
             // Execute task
             info!("Executing task: {:?}", task.task_type);
+
+            // Use hardcoded IDs for "Virtual Fisher" on this specific server as a fallback,
+            // or ideally fetch dynamically. But `process` is synchronous in structure (except for the send part).
+            // We need to make sure we have the correct IDs.
+            // Since we know the IDs from the discovery step:
+            // daily: 912432961033482262
+            // sell: 912432960643416116
+            // buy: 912432961134166090
+
+            let guild_id = "1273750160022835301"; // Hardcoded for test
+            let channel_id = &self.config.system.channel_id.to_string();
+            let app_id = "574652751745777665".to_string();
+
             match &task.task_type {
                 TaskType::Daily => {
-                     let _ = client.send_command(&self.config.system.channel_id.to_string(), &self.config.system.channel_id.to_string(),
-                        &crate::discord::types::ApplicationCommand {
-                            id: "0".to_string(), // Placeholder
-                            application_id: "574652751745777665".to_string(),
-                            version: "0".to_string(),
-                            default_permission: None,
-                            default_member_permissions: None,
-                            r#type: 1,
-                            name: "daily".to_string(),
-                            description: "".to_string(),
-                            guild_id: None
-                        }, None).await;
+                    // Fetch command dynamically
+                    if let Ok(Some(cmd)) = client.get_command(guild_id, "daily").await {
+                         let _ = client.send_command(guild_id, channel_id, &cmd, None).await;
+                    } else {
+                        // Fallback to construct with known ID if fetch fails
+                         let _ = client.send_command(guild_id, channel_id,
+                            &crate::discord::types::ApplicationCommand {
+                                id: "912432961033482262".to_string(),
+                                application_id: app_id.clone(),
+                                version: "0".to_string(),
+                                default_permission: None,
+                                default_member_permissions: None,
+                                r#type: 1,
+                                name: "daily".to_string(),
+                                description: "".to_string(),
+                                guild_id: None
+                            }, None).await;
+                    }
                 },
                 TaskType::Sell => {
-                     let _ = client.send_command(&self.config.system.channel_id.to_string(), &self.config.system.channel_id.to_string(),
-                        &crate::discord::types::ApplicationCommand {
-                            id: "0".to_string(),
-                            application_id: "574652751745777665".to_string(),
-                            version: "0".to_string(),
-                            default_permission: None,
-                            default_member_permissions: None,
-                            r#type: 1,
-                            name: "sell".to_string(),
-                            description: "".to_string(),
-                            guild_id: None
-                        }, Some(vec![serde_json::json!({
+                    if let Ok(Some(cmd)) = client.get_command(guild_id, "sell").await {
+                         let _ = client.send_command(guild_id, channel_id, &cmd, Some(vec![serde_json::json!({
                             "type": 3,
                             "name": "amount",
                             "value": "all"
                         })])).await;
+                    } else {
+                         let _ = client.send_command(guild_id, channel_id,
+                            &crate::discord::types::ApplicationCommand {
+                                id: "912432960643416116".to_string(),
+                                application_id: app_id.clone(),
+                                version: "0".to_string(),
+                                default_permission: None,
+                                default_member_permissions: None,
+                                r#type: 1,
+                                name: "sell".to_string(),
+                                description: "".to_string(),
+                                guild_id: None
+                            }, Some(vec![serde_json::json!({
+                                "type": 3,
+                                "name": "amount",
+                                "value": "all"
+                            })])).await;
+                    }
                 },
                 TaskType::Boost(name) => {
-                     let _ = client.send_command(&self.config.system.channel_id.to_string(), &self.config.system.channel_id.to_string(),
-                        &crate::discord::types::ApplicationCommand {
-                            id: "0".to_string(),
-                            application_id: "574652751745777665".to_string(),
-                            version: "0".to_string(),
-                            default_permission: None,
-                            default_member_permissions: None,
-                            r#type: 1,
-                            name: "buy".to_string(),
-                            description: "".to_string(),
-                            guild_id: None
-                        }, Some(vec![serde_json::json!({
+                    if let Ok(Some(cmd)) = client.get_command(guild_id, "buy").await {
+                         let _ = client.send_command(guild_id, channel_id, &cmd, Some(vec![serde_json::json!({
                             "type": 3,
                             "name": "item",
                             "value": name
                         })])).await;
+                    } else {
+                         let _ = client.send_command(guild_id, channel_id,
+                            &crate::discord::types::ApplicationCommand {
+                                id: "912432961134166090".to_string(),
+                                application_id: app_id.clone(),
+                                version: "0".to_string(),
+                                default_permission: None,
+                                default_member_permissions: None,
+                                r#type: 1,
+                                name: "buy".to_string(),
+                                description: "".to_string(),
+                                guild_id: None
+                            }, Some(vec![serde_json::json!({
+                                "type": 3,
+                                "name": "item",
+                                "value": name
+                            })])).await;
+                    }
                 },
                 _ => {}
             }
