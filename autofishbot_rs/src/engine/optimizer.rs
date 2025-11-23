@@ -43,8 +43,15 @@ impl Optimizer {
         let avg_val = stats.map(|s| s.avg_gold_per_fish).unwrap_or(15.0);
         let avg_val = if avg_val == 0.0 { 15.0 } else { avg_val };
 
-        let biome_data = &BIOME_DATA[&biome];
-        let base_cd = 3.5;
+        // Safe lookup for biome data
+        let biome_data = BIOME_DATA.get(&biome).unwrap_or_else(|| {
+             BIOME_DATA.get(&Biome::River).expect("River biome data missing from static map")
+        });
+
+        // Formula: GPS = (Avg_Gold_Per_Cast * Catch_Rate) / (Base_Cooldown + Penalty - Reduction)
+        // Avg_Gold_Per_Cast = rod.expected_fish * avg_val
+
+        let base_cd = biome_data.base_cooldown;
         let total_cd = (base_cd + biome_data.cooldown_penalty - boat.cooldown_reduction).max(2.0);
 
         let catch_rate = biome_data.catch_rate;
