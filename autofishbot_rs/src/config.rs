@@ -17,6 +17,7 @@ pub struct Config {
 pub struct SystemConfig {
     pub user_token: String,
     pub user_cooldown: f64,
+    pub guild_id: u64, // Added guild_id
     pub channel_id: u64,
     pub debug: bool,
 }
@@ -66,6 +67,7 @@ impl Default for Config {
             system: SystemConfig {
                 user_token: "".to_string(),
                 user_cooldown: 3.5,
+                guild_id: 0,
                 channel_id: 0,
                 debug: false,
             },

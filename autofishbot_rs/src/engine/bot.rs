@@ -3,14 +3,14 @@ use crate::discord::client::DiscordClient;
 use crate::engine::captcha::Captcha;
 use crate::engine::scheduler::Scheduler;
 use crate::engine::cooldown::CooldownManager;
+use crate::engine::explorer::Explorer;
+use crate::engine::database::Database;
 use log::{info, warn};
 use std::sync::Arc;
 use tokio::sync::Mutex;
 use std::time::Duration;
-use rand::Rng;
 
 use crate::tui::app::App;
-
 use crate::discord::types::ApplicationCommand;
 
 pub struct Bot {
@@ -22,6 +22,9 @@ pub struct Bot {
     state: BotState,
     fish_command: Option<ApplicationCommand>,
     pub cooldown_manager: Arc<Mutex<CooldownManager>>,
+    explorer: Arc<Mutex<Explorer>>,
+    #[allow(dead_code)]
+    database: Arc<Database>,
 }
 
 #[derive(Debug, PartialEq)]
@@ -29,14 +32,20 @@ enum BotState {
     Idle,
     Fishing,
     Captcha,
-    Break,
+    #[allow(dead_code)] Break,
+    Exploration, // New State
 }
 
 impl Bot {
-    pub fn new(config: Config, client: Arc<DiscordClient>, app_state: Arc<Mutex<App>>) -> Self {
+    pub async fn new(config: Config, client: Arc<DiscordClient>, app_state: Arc<Mutex<App>>, database: Arc<Database>) -> Self {
         let scheduler = Arc::new(Mutex::new(Scheduler::new(config.clone())));
         let captcha = Arc::new(Mutex::new(Captcha::new(config.clone())));
         let cooldown_manager = Arc::new(Mutex::new(CooldownManager::new(config.system.user_cooldown)));
+
+        // Initialize Explorer
+        let guild_id = config.system.guild_id.to_string();
+        let channel_id = config.system.channel_id.to_string();
+        let explorer = Arc::new(Mutex::new(Explorer::new(client.clone(), database.clone(), guild_id, channel_id)));
 
         Self {
             config,
@@ -47,10 +56,16 @@ impl Bot {
             state: BotState::Idle,
             fish_command: None,
             cooldown_manager,
+            explorer,
+            database,
         }
     }
 
     pub async fn run(&mut self) {
+        // Startup delay to prevent rate limit spikes
+        info!("Bot warming up... waiting 5 seconds.");
+        tokio::time::sleep(Duration::from_secs(5)).await;
+
         loop {
             // Check if bot is running from TUI state
             let is_running = {
@@ -64,8 +79,14 @@ impl Bot {
                 continue;
             }
 
+            // Simple Logic: If running, default to Exploration for this test
+            // In real app, we might toggle between Fishing and Exploration
             if self.state == BotState::Idle {
-                self.state = BotState::Fishing;
+                self.state = BotState::Exploration;
+                {
+                    let mut explorer = self.explorer.lock().await;
+                    explorer.start().await;
+                }
             }
 
             // Check Captcha
@@ -82,16 +103,6 @@ impl Bot {
             match self.state {
                 BotState::Fishing => {
                     // Perform fishing action
-                    // Check cooldowns
-                    // We need to coordinate with scheduler for other tasks
-
-                    // Prioritize clicking "Play Again" button if available
-                    // We need access to the last message state or similar.
-                    // Ideally, we should have a shared state for "Last Actionable Component"
-
-                    // For now, let's just fish.
-
-                    // Send 'fish' command
                     info!("Fishing...");
                     {
                         let mut app = self.app_state.lock().await;
@@ -99,10 +110,10 @@ impl Bot {
                     }
 
                     // Fish command
-                    let guild_id = "1273750160022835301"; // Hardcoded for test
+                    let guild_id = self.config.system.guild_id.to_string();
 
                     if self.fish_command.is_none() {
-                        match self.client.get_command(guild_id, "fish").await {
+                        match self.client.get_command(&guild_id, "fish").await {
                             Ok(Some(cmd)) => {
                                 info!("Found fish command: {:?}", cmd);
                                 self.fish_command = Some(cmd);
@@ -117,7 +128,7 @@ impl Bot {
                     }
 
                     if let Some(cmd) = &self.fish_command {
-                         if let Err(e) = self.client.send_command(guild_id, &self.config.system.channel_id.to_string(), cmd, None).await {
+                         if let Err(e) = self.client.send_command(&guild_id, &self.config.system.channel_id.to_string(), cmd, None).await {
                             log::error!("Failed to send fish command: {}", e);
                         }
                     }
@@ -131,8 +142,21 @@ impl Bot {
                     info!("Sleeping for {:.2}s", sleep_duration.as_secs_f64());
                     tokio::time::sleep(sleep_duration).await;
                 },
+                BotState::Exploration => {
+                    // FIX: We need to access the last full message.
+                    let last_msg_obj = {
+                         let app = self.app_state.lock().await;
+                         app.last_message_object.clone()
+                    };
+
+                    {
+                        let mut explorer = self.explorer.lock().await;
+                        explorer.tick(last_msg_obj.as_ref()).await;
+                    }
+
+                    tokio::time::sleep(Duration::from_secs(1)).await;
+                },
                 BotState::Captcha => {
-                    // Handled by event listener triggering solver
                     warn!("Waiting for captcha solution...");
                     tokio::time::sleep(Duration::from_secs(5)).await;
                 },

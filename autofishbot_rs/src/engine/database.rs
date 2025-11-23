@@ -1,7 +1,9 @@
-use sqlx::{sqlite::SqlitePoolOptions, Pool, Sqlite};
+use sqlx::{sqlite::{SqliteConnectOptions, SqlitePoolOptions, SqliteJournalMode}, Pool, Sqlite};
 use anyhow::Result;
 use std::path::Path;
 use tokio::fs;
+use std::str::FromStr;
+use log::info;
 
 pub struct Database {
     pub pool: Pool<Sqlite>,
@@ -11,12 +13,17 @@ impl Database {
     pub async fn new(db_path: &str) -> Result<Self> {
         // Create file if not exists
         if !Path::new(db_path).exists() {
+            info!("Creating database file: {}", db_path);
             fs::File::create(db_path).await?;
         }
 
+        let options = SqliteConnectOptions::from_str(&format!("sqlite://{}", db_path))?
+            .journal_mode(SqliteJournalMode::Delete) // Use DELETE journal mode to avoid WAL lock issues
+            .create_if_missing(true);
+
         let pool = SqlitePoolOptions::new()
             .max_connections(5)
-            .connect(&format!("sqlite://{}", db_path))
+            .connect_with(options)
             .await?;
 
         let db = Self { pool };
@@ -33,12 +40,16 @@ impl Database {
                 name TEXT UNIQUE NOT NULL,
                 rarity TEXT,
                 base_value REAL,
-                biome TEXT
+                biome TEXT,
+                sell_value REAL
             );
             "#,
         )
         .execute(&self.pool)
         .await?;
+
+        // Ensure sell_value column exists (manual migration for existing dbs)
+        let _ = sqlx::query("ALTER TABLE fish ADD COLUMN sell_value REAL").execute(&self.pool).await;
 
         // Catch History: Logs every fishing result
         sqlx::query(
@@ -81,6 +92,58 @@ impl Database {
                 timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
                 wait_time REAL,
                 total_cooldown REAL
+            );
+            "#,
+        )
+        .execute(&self.pool)
+        .await?;
+
+        // --- NEW TABLES FOR DATA GATHERING ---
+
+        // Shop Items: Catalogs items found in shops
+        sqlx::query(
+            r#"
+            CREATE TABLE IF NOT EXISTS shop_items (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT NOT NULL,
+                shop_type TEXT NOT NULL,
+                price REAL,
+                currency TEXT,
+                description TEXT,
+                stock INTEGER,
+                last_seen DATETIME DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(name, shop_type)
+            );
+            "#,
+        )
+        .execute(&self.pool)
+        .await?;
+
+        // Game Entities: Generic storage for anything else (Buffs, Quests, etc found in lists)
+        sqlx::query(
+            r#"
+            CREATE TABLE IF NOT EXISTS game_entities (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                entity_type TEXT NOT NULL, -- "Buff", "Quest", "Badge"
+                name TEXT NOT NULL,
+                details TEXT, -- JSON or raw text
+                last_seen DATETIME DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(entity_type, name)
+            );
+            "#,
+        )
+        .execute(&self.pool)
+        .await?;
+
+         // Command Registry: Tracks commands we've found and executed
+        sqlx::query(
+            r#"
+            CREATE TABLE IF NOT EXISTS command_registry (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                full_command_name TEXT UNIQUE NOT NULL, -- e.g. "shop buy"
+                description TEXT,
+                params TEXT,
+                last_executed DATETIME
             );
             "#,
         )
@@ -144,6 +207,78 @@ impl Database {
         )
         .bind(wait_time)
         .bind(total_cooldown)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    pub async fn upsert_shop_item(&self, name: &str, shop_type: &str, price: f32, currency: &str, description: &str, stock: Option<i32>) -> Result<()> {
+        sqlx::query(
+            r#"
+            INSERT INTO shop_items (name, shop_type, price, currency, description, stock, last_seen)
+            VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+            ON CONFLICT(name, shop_type) DO UPDATE SET
+            price = excluded.price,
+            currency = excluded.currency,
+            description = excluded.description,
+            stock = excluded.stock,
+            last_seen = CURRENT_TIMESTAMP;
+            "#,
+        )
+        .bind(name)
+        .bind(shop_type)
+        .bind(price)
+        .bind(currency)
+        .bind(description)
+        .bind(stock)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    pub async fn upsert_game_entity(&self, entity_type: &str, name: &str, details: &str) -> Result<()> {
+        sqlx::query(
+            r#"
+            INSERT INTO game_entities (entity_type, name, details, last_seen)
+            VALUES (?, ?, ?, CURRENT_TIMESTAMP)
+            ON CONFLICT(entity_type, name) DO UPDATE SET
+            details = excluded.details,
+            last_seen = CURRENT_TIMESTAMP;
+            "#,
+        )
+        .bind(entity_type)
+        .bind(name)
+        .bind(details)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    pub async fn register_command(&self, name: &str, description: &str, params: &str) -> Result<()> {
+         sqlx::query(
+            r#"
+            INSERT INTO command_registry (full_command_name, description, params)
+            VALUES (?, ?, ?)
+            ON CONFLICT(full_command_name) DO UPDATE SET
+            description = excluded.description,
+            params = excluded.params;
+            "#,
+        )
+        .bind(name)
+        .bind(description)
+        .bind(params)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    pub async fn mark_command_executed(&self, name: &str) -> Result<()> {
+        sqlx::query(
+            r#"
+            UPDATE command_registry SET last_executed = CURRENT_TIMESTAMP WHERE full_command_name = ?
+            "#,
+        )
+        .bind(name)
         .execute(&self.pool)
         .await?;
         Ok(())
