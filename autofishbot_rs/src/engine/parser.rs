@@ -1,6 +1,6 @@
 use regex::Regex;
 use lazy_static::lazy_static;
-use log::{info, warn};
+use serde::{Deserialize, Serialize};
 
 lazy_static! {
     // Example: "3 Salmon" or "1 Golden Fish"
@@ -17,6 +17,10 @@ lazy_static! {
     static ref COOLDOWN_WAIT_PATTERN: Regex = Regex::new(r"You must wait \*\*([\d\.]+)\*\*s").unwrap();
     // Example: "Current cooldown: **3.5** seconds"
     static ref COOLDOWN_TOTAL_PATTERN: Regex = Regex::new(r"Current cooldown: \*\*([\d\.]+)\*\* seconds").unwrap();
+
+    // Shop Item Pattern: "**Item Name** - $500" or similar
+    // This is a guess, will need refinement based on actual output
+    static ref SHOP_ITEM_PATTERN: Regex = Regex::new(r"\*\*([^\*]+)\*\*\s+-\s+\$([\d,]+)").unwrap();
 }
 
 #[derive(Debug)]
@@ -36,6 +40,22 @@ pub struct PlayerStats {
 pub struct CooldownEvent {
     pub wait_time: f32,
     pub total_cooldown: f32,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct ShopItem {
+    pub name: String,
+    pub price: f32,
+    pub currency: String,
+    pub description: String,
+    pub stock: Option<i32>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct GameEntity {
+    pub entity_type: String,
+    pub name: String,
+    pub details: String,
 }
 
 pub fn parse_cooldown_embed(description: &str) -> Option<CooldownEvent> {
@@ -125,4 +145,81 @@ pub fn parse_profile_embed(description: &str) -> PlayerStats {
     }
 
     PlayerStats { balance, level, biome }
+}
+
+pub fn parse_shop_embed(title: &str, description: &str, fields: Option<&Vec<crate::discord::types::EmbedField>>) -> Vec<ShopItem> {
+    let mut items = Vec::new();
+    let shop_currency = if title.contains("Magma") { "Magma" } else { "Money" };
+
+    // Method 1: Check fields (Common for many bots)
+    if let Some(fields_vec) = fields {
+        for field in fields_vec {
+            // Assume format: Name -> "Price: $X\nDesc: ..."
+            let name = field.name.replace("*", "").trim().to_string();
+            let mut price = 0.0;
+            let mut desc = String::new();
+
+            for line in field.value.lines() {
+                if line.to_lowercase().contains("price") || line.contains("$") {
+                     // Extract number
+                     let num_str: String = line.chars().filter(|c| c.is_digit(10) || *c == '.').collect();
+                     if let Ok(p) = num_str.parse::<f32>() {
+                         price = p;
+                     }
+                } else {
+                    desc.push_str(line);
+                    desc.push('\n');
+                }
+            }
+
+            if price > 0.0 {
+                items.push(ShopItem {
+                    name,
+                    price,
+                    currency: shop_currency.to_string(),
+                    description: desc.trim().to_string(),
+                    stock: None
+                });
+            }
+        }
+    }
+
+    // Method 2: Check Description (List format)
+    if items.is_empty() {
+        for line in description.lines() {
+            // Very basic heuristic parser
+             if let Some(caps) = SHOP_ITEM_PATTERN.captures(line) {
+                 if let (Some(name_cap), Some(price_cap)) = (caps.get(1), caps.get(2)) {
+                      let clean_price = price_cap.as_str().replace(",", "");
+                      if let Ok(price) = clean_price.parse::<f32>() {
+                           items.push(ShopItem {
+                               name: name_cap.as_str().trim().to_string(),
+                               price,
+                               currency: shop_currency.to_string(),
+                               description: line.to_string(), // Store full line as desc for now
+                               stock: None
+                           });
+                      }
+                 }
+             }
+        }
+    }
+
+    items
+}
+
+pub fn parse_generic_list(title: &str, description: &str) -> Vec<GameEntity> {
+    let mut entities = Vec::new();
+    let type_name = title.split_whitespace().last().unwrap_or("Unknown").to_string();
+
+    for line in description.lines() {
+        if line.trim().is_empty() { continue; }
+        // Store every non-empty line as an entity for now
+        entities.push(GameEntity {
+            entity_type: type_name.clone(),
+            name: line.chars().take(50).collect(), // First 50 chars as name?
+            details: line.to_string()
+        });
+    }
+    entities
 }

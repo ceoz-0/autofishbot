@@ -57,7 +57,7 @@ async fn main() -> Result<()> {
     });
 
     // Bot Engine
-    let mut bot = Bot::new(config.clone(), client.clone(), app.clone());
+    let mut bot = Bot::new(config.clone(), client.clone(), app.clone(), db.clone()).await;
     let bot_cooldown_manager = bot.cooldown_manager.clone(); // Share cooldown manager
 
     let _bot_handle = tokio::spawn(async move {
@@ -75,10 +75,15 @@ async fn main() -> Result<()> {
 
              // Handle specific events like MESSAGE_CREATE
              if let Some(t) = payload.t {
-                 println!("Event received: {}", t);
+                 // println!("Event received: {}", t);
                  app.add_log(format!("Event: {}", t));
                  if t == "MESSAGE_CREATE" || t == "MESSAGE_UPDATE" {
                       if let Some(d) = payload.d {
+                           // Try to parse full message object
+                           if let Ok(msg) = serde_json::from_value::<autofishbot_rs::discord::types::Message>(d.clone()) {
+                               app.last_message_object = Some(msg);
+                           }
+
                            // Check Author
                            let is_vf = if let Some(author) = d.get("author") {
                                 author.get("id").and_then(|id| id.as_str()).map(|s| s == "574652751745777665").unwrap_or(false)
@@ -86,7 +91,7 @@ async fn main() -> Result<()> {
 
                            if let Some(content) = d.get("content").and_then(|v| v.as_str()) {
                                app.last_message = content.to_string();
-                               println!("Message Content: {}", content);
+                               // println!("Message Content: {}", content);
 
                                // Update Profile Parsing
                                let embeds = d.get("embeds").and_then(|v| v.as_array());
@@ -130,7 +135,7 @@ async fn main() -> Result<()> {
                                             }
                                        } else if let Some(desc) = first_embed.get("description").and_then(|v| v.as_str()) {
                                             // Some embeds might not have a title but have a description (e.g., Cooldown warnings)
-                                            println!("Embed Description (No Title): {}", desc);
+                                            // println!("Embed Description (No Title): {}", desc);
 
                                             if is_vf {
                                                 if let Some(cd_event) = parser::parse_cooldown_embed(desc) {
@@ -159,8 +164,9 @@ async fn main() -> Result<()> {
     });
 
     // Keep alive for testing
-    println!("Running for 60 seconds...");
-    tokio::time::sleep(Duration::from_secs(60)).await;
+    let minutes = 30;
+    println!("Running for {} minutes...", minutes);
+    tokio::time::sleep(Duration::from_secs(60 * minutes)).await;
     println!("Test complete.");
 
     // Verify Database
@@ -179,6 +185,17 @@ async fn main() -> Result<()> {
         .fetch_one(&db.pool)
         .await?;
     println!("Unique fish known: {}", fish);
+
+    // Check gathered data
+    let shop_items: i32 = sqlx::query_scalar("SELECT count(*) FROM shop_items")
+        .fetch_one(&db.pool)
+        .await?;
+    println!("Shop items gathered: {}", shop_items);
+
+    let entities: i32 = sqlx::query_scalar("SELECT count(*) FROM game_entities")
+        .fetch_one(&db.pool)
+        .await?;
+    println!("Game entities gathered: {}", entities);
 
     Ok(())
 }

@@ -1,5 +1,6 @@
 use crate::config::Config;
 use crate::engine::profile::Profile;
+use crate::discord::types::Message;
 
 pub struct App {
     pub config: Config,
@@ -11,6 +12,7 @@ pub struct App {
     pub stats: Stats,
     pub profile: Profile,
     pub last_message: String,
+    pub last_message_object: Option<Message>, // Store full message object for parsers
     pub should_quit: bool,
 }
 
@@ -38,6 +40,7 @@ impl App {
             },
             profile: Profile::default(),
             last_message: String::new(),
+            last_message_object: None,
             should_quit: false,
         }
     }

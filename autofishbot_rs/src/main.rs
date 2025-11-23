@@ -19,6 +19,7 @@ use autofishbot_rs::discord::gateway::Gateway;
 use autofishbot_rs::discord::types::GatewayPayload;
 use autofishbot_rs::discord::client::DiscordClient;
 use autofishbot_rs::engine::bot::Bot;
+use autofishbot_rs::engine::database::Database;
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -31,6 +32,9 @@ async fn main() -> Result<()> {
         cfg.save(config_path)?;
         cfg
     };
+
+    // Initialize Database
+    let db = Arc::new(Database::new("bot_data.db").await?);
 
     // Setup TUI
     enable_raw_mode()?;
@@ -56,7 +60,7 @@ async fn main() -> Result<()> {
     });
 
     // Bot Engine
-    let mut bot = Bot::new(config.clone(), client.clone(), app.clone());
+    let mut bot = Bot::new(config.clone(), client.clone(), app.clone(), db.clone()).await;
     let _bot_handle = tokio::spawn(async move {
         bot.run().await;
     });
@@ -72,6 +76,11 @@ async fn main() -> Result<()> {
                  app.add_log(format!("Event: {}", t));
                  if t == "MESSAGE_CREATE" || t == "MESSAGE_UPDATE" {
                       if let Some(d) = payload.d {
+                           // Try to parse full message object
+                           if let Ok(msg) = serde_json::from_value::<autofishbot_rs::discord::types::Message>(d.clone()) {
+                               app.last_message_object = Some(msg);
+                           }
+
                            if let Some(content) = d.get("content").and_then(|v| v.as_str()) {
                                app.last_message = content.to_string();
 
@@ -86,8 +95,6 @@ async fn main() -> Result<()> {
                                        }
                                    }
                                }
-
-                               // Also check content for untitled messages if needed
                            }
                       }
                  }

@@ -3,13 +3,13 @@ use reqwest::{Client, Proxy};
 use serde_json::{json, Value};
 use crate::config::Config;
 use crate::discord::types::ApplicationCommand;
-use log::{error, info, debug};
+use log::error;
 use std::time::Duration;
 use base64::{Engine as _, engine::general_purpose};
 
 pub struct DiscordClient {
     client: Client,
-    config: Config,
+    _config: Config,
     token: String,
     application_id: String,
 }
@@ -43,7 +43,7 @@ impl DiscordClient {
         Ok(Self {
             client,
             token: config.system.user_token.clone(),
-            config,
+            _config: config,
             application_id,
         })
     }

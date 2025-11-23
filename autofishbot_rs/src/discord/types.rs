@@ -29,7 +29,21 @@ pub struct Message {
 pub struct Embed {
     pub title: Option<String>,
     pub description: Option<String>,
-    // add other fields if necessary
+    pub fields: Option<Vec<EmbedField>>,
+    pub footer: Option<EmbedFooter>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct EmbedField {
+    pub name: String,
+    pub value: String,
+    pub inline: Option<bool>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct EmbedFooter {
+    pub text: String,
+    pub icon_url: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -40,6 +54,17 @@ pub struct Component {
     pub label: Option<String>,
     pub style: Option<u8>,
     pub emoji: Option<Emoji>,
+    pub options: Option<Vec<SelectOption>>,
+    pub placeholder: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct SelectOption {
+    pub label: String,
+    pub value: String,
+    pub description: Option<String>,
+    pub emoji: Option<Emoji>,
+    pub default: Option<bool>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -83,8 +108,25 @@ pub struct ApplicationCommand {
     pub version: String,
     pub default_permission: Option<bool>,
     pub default_member_permissions: Option<String>,
-    pub r#type: u8,
+    pub r#type: Option<u8>,
     pub name: String,
     pub description: String,
     pub guild_id: Option<String>,
+    pub options: Option<Vec<ApplicationCommandOption>>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct ApplicationCommandOption {
+    pub r#type: u8,
+    pub name: String,
+    pub description: String,
+    pub required: Option<bool>,
+    pub choices: Option<Vec<ApplicationCommandOptionChoice>>,
+    pub options: Option<Vec<ApplicationCommandOption>>, // Nested options for subcommands
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct ApplicationCommandOptionChoice {
+    pub name: String,
+    pub value: serde_json::Value,
 }

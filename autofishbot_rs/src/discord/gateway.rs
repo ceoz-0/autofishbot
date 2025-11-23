@@ -1,6 +1,6 @@
 use crate::config::Config;
 use crate::discord::types::{GatewayPayload, HelloPayload};
-use anyhow::{Result, anyhow};
+use anyhow::Result;
 use futures_util::{SinkExt, StreamExt};
 use log::{info, error, debug, warn};
 use serde_json::json;
@@ -21,7 +21,7 @@ pub struct Gateway {
     ws_stream: Option<WebSocketStream<MaybeTlsStream<TcpStream>>>,
     heartbeat_interval: u64,
     sequence: Option<u64>,
-    session_id: Option<String>,
+    _session_id: Option<String>,
     event_sender: tokio::sync::mpsc::Sender<GatewayPayload>,
     running: bool,
 }
@@ -33,7 +33,7 @@ impl Gateway {
             ws_stream: None,
             heartbeat_interval: 41250, // Default
             sequence: None,
-            session_id: None,
+            _session_id: None,
             event_sender,
             running: false,
         }
@@ -65,7 +65,7 @@ impl Gateway {
         let (tx, mut rx) = tokio::sync::mpsc::channel::<Message>(10);
 
         // Writer task
-        let writer_handle = tokio::spawn(async move {
+        let _writer_handle = tokio::spawn(async move {
             while let Some(msg) = rx.recv().await {
                 if let Err(e) = write.send(msg).await {
                     error!("Failed to send message: {}", e);
@@ -74,12 +74,12 @@ impl Gateway {
             }
         });
 
-        let heartbeat_interval_ms = self.heartbeat_interval; // Initial guess, will be updated
-        let heartbeat_tx = tx.clone();
+        let _heartbeat_interval_ms = self.heartbeat_interval; // Initial guess, will be updated
+        let _heartbeat_tx = tx.clone();
 
         // We need shared state for sequence number to include in heartbeat
         let sequence = Arc::new(Mutex::new(self.sequence));
-        let seq_clone = sequence.clone();
+        let _seq_clone = sequence.clone();
 
         // The heartbeat interval is dynamic, set by Hello event.
         // So we can't start the fixed interval loop yet technically.
@@ -99,7 +99,7 @@ impl Gateway {
         let (incoming_tx, mut incoming_rx) = tokio::sync::mpsc::channel::<GatewayPayload>(100);
 
         // Reader task
-        let reader_handle = tokio::spawn(async move {
+        let _reader_handle = tokio::spawn(async move {
             while let Some(message) = read.next().await {
                 match message {
                     Ok(Message::Text(text)) => {
