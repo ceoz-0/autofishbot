@@ -17,6 +17,12 @@ pub struct Explorer {
     current_command_index: usize,
     state: ExplorerState,
     discovery_attempts: u32,
+
+    // Submenu navigation tracking
+    submenu_custom_id: Option<String>,
+    submenu_options: Vec<parser::SelectMenuOption>,
+    current_submenu_index: usize,
+    current_message_id: String,
 }
 
 #[derive(Debug, PartialEq)]
@@ -25,9 +31,9 @@ enum ExplorerState {
     DiscoveringCommands,
     ExecutingCommand,
     WaitingForResponse,
-    #[allow(dead_code)] NavigatingPagination,
-    #[allow(dead_code)]
     NavigatingSubmenu,
+    WaitingForSubmenuResponse,
+    #[allow(dead_code)] NavigatingPagination,
     Cooldown,
 }
 
@@ -53,6 +59,10 @@ impl Explorer {
             current_command_index: 0,
             state: ExplorerState::Idle,
             discovery_attempts: 0,
+            submenu_custom_id: None,
+            submenu_options: Vec::new(),
+            current_submenu_index: 0,
+            current_message_id: String::new(),
         }
     }
 
@@ -180,7 +190,15 @@ impl Explorer {
                 if let Some(msg) = last_message {
                     self.parse_and_save(msg).await;
 
-                    if self.has_pagination(msg) {
+                    // Check for submenu first
+                    if let Some((custom_id, options)) = parser::parse_select_menu_options(msg) {
+                        info!("Found submenu with {} options.", options.len());
+                        self.submenu_custom_id = Some(custom_id);
+                        self.submenu_options = options;
+                        self.current_submenu_index = 0;
+                        self.current_message_id = msg.id.clone();
+                        self.state = ExplorerState::NavigatingSubmenu;
+                    } else if self.has_pagination(msg) {
                          self.handle_pagination(msg).await;
                     } else {
                         self.advance_command();
@@ -188,6 +206,47 @@ impl Explorer {
                 } else {
                     self.advance_command();
                 }
+            },
+            ExplorerState::NavigatingSubmenu => {
+                if self.current_submenu_index >= self.submenu_options.len() {
+                    info!("Finished submenu exploration.");
+                    self.submenu_custom_id = None;
+                    self.submenu_options.clear();
+                    self.advance_command();
+                    return;
+                }
+
+                let option = &self.submenu_options[self.current_submenu_index];
+                info!("Selecting submenu option: {}", option.label);
+
+                if let Some(custom_id) = &self.submenu_custom_id {
+                    let values = vec![option.value.clone()];
+                    if let Err(e) = self.client.interact_component(&self.guild_id, &self.channel_id, &self.current_message_id, custom_id, Some(3), Some(values)).await {
+                        error!("Failed to select option: {}", e);
+                        // Skip if failed
+                        self.current_submenu_index += 1;
+                    } else {
+                        self.state = ExplorerState::WaitingForSubmenuResponse;
+                    }
+                } else {
+                    self.advance_command();
+                }
+            },
+            ExplorerState::WaitingForSubmenuResponse => {
+                tokio::time::sleep(Duration::from_secs(4)).await;
+
+                match self.client.get_message(&self.channel_id, &self.current_message_id).await {
+                    Ok(msg) => {
+                        self.parse_and_save(&msg).await;
+                        self.current_message_id = msg.id.clone();
+                    },
+                    Err(e) => {
+                        error!("Failed to fetch updated message in submenu: {}", e);
+                    }
+                }
+
+                self.current_submenu_index += 1;
+                self.state = ExplorerState::NavigatingSubmenu;
             },
             ExplorerState::NavigatingPagination => {},
             ExplorerState::Cooldown => {
@@ -258,7 +317,7 @@ impl Explorer {
                 if !items.is_empty() {
                     info!("Found {} items in {}", items.len(), title);
                     for item in items {
-                        let _ = self.db.upsert_shop_item(&item.name, &title, item.price, &item.currency, &item.description, item.stock).await;
+                        let _ = self.db.upsert_shop_item(&item.name, &title, item.price, &item.currency, &item.description, item.stock, item.stats.as_deref()).await;
                     }
                 } else {
                     let entities = parser::parse_generic_list(&title, &desc);
@@ -301,7 +360,7 @@ impl Explorer {
                              if let Some(label) = &comp.label {
                                 if label.contains("Next") || label.contains(">") {
                                     info!("Clicking Next Page...");
-                                    let _ = self.client.interact_component(&self.guild_id, &self.channel_id, &msg.id, custom_id).await;
+                                    let _ = self.client.interact_component(&self.guild_id, &self.channel_id, &msg.id, custom_id, Some(2), None).await;
                                     tokio::time::sleep(Duration::from_secs(2)).await;
                                     return;
                                 }

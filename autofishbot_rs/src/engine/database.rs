@@ -51,6 +51,9 @@ impl Database {
         // Ensure sell_value column exists (manual migration for existing dbs)
         let _ = sqlx::query("ALTER TABLE fish ADD COLUMN sell_value REAL").execute(&self.pool).await;
 
+        // Ensure stats column exists for shop_items
+        let _ = sqlx::query("ALTER TABLE shop_items ADD COLUMN stats TEXT").execute(&self.pool).await;
+
         // Catch History: Logs every fishing result
         sqlx::query(
             r#"
@@ -216,16 +219,17 @@ impl Database {
         Ok(())
     }
 
-    pub async fn upsert_shop_item(&self, name: &str, shop_type: &str, price: f32, currency: &str, description: &str, stock: Option<i32>) -> Result<()> {
+    pub async fn upsert_shop_item(&self, name: &str, shop_type: &str, price: f32, currency: &str, description: &str, stock: Option<i32>, stats: Option<&str>) -> Result<()> {
         sqlx::query(
             r#"
-            INSERT INTO shop_items (name, shop_type, price, currency, description, stock, last_seen)
-            VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+            INSERT INTO shop_items (name, shop_type, price, currency, description, stock, stats, last_seen)
+            VALUES (?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
             ON CONFLICT(name, shop_type) DO UPDATE SET
             price = excluded.price,
             currency = excluded.currency,
             description = excluded.description,
             stock = excluded.stock,
+            stats = excluded.stats,
             last_seen = CURRENT_TIMESTAMP;
             "#,
         )
@@ -235,6 +239,7 @@ impl Database {
         .bind(currency)
         .bind(description)
         .bind(stock)
+        .bind(stats)
         .execute(&self.pool)
         .await?;
         Ok(())

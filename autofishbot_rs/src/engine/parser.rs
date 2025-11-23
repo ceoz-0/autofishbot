@@ -49,6 +49,14 @@ pub struct ShopItem {
     pub currency: String,
     pub description: String,
     pub stock: Option<i32>,
+    pub stats: Option<String>,
+}
+
+#[derive(Debug)]
+pub struct SelectMenuOption {
+    pub label: String,
+    pub value: String,
+    pub description: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -173,12 +181,21 @@ pub fn parse_shop_embed(title: &str, description: &str, fields: Option<&Vec<crat
             }
 
             if price > 0.0 {
+                let desc_str = desc.trim().to_string();
+                // Extract stats from description (simple heuristic: lines starting with +)
+                let stats: Vec<String> = desc_str.lines()
+                    .filter(|l| l.trim().starts_with('+'))
+                    .map(|l| l.trim().to_string())
+                    .collect();
+                let stats_str = if stats.is_empty() { None } else { Some(stats.join(", ")) };
+
                 items.push(ShopItem {
                     name,
                     price,
                     currency: shop_currency.to_string(),
-                    description: desc.trim().to_string(),
-                    stock: None
+                    description: desc_str,
+                    stock: None,
+                    stats: stats_str,
                 });
             }
         }
@@ -197,7 +214,8 @@ pub fn parse_shop_embed(title: &str, description: &str, fields: Option<&Vec<crat
                                price,
                                currency: shop_currency.to_string(),
                                description: line.to_string(), // Store full line as desc for now
-                               stock: None
+                               stock: None,
+                               stats: None,
                            });
                       }
                  }
@@ -206,6 +224,28 @@ pub fn parse_shop_embed(title: &str, description: &str, fields: Option<&Vec<crat
     }
 
     items
+}
+
+pub fn parse_select_menu_options(msg: &crate::discord::types::Message) -> Option<(String, Vec<SelectMenuOption>)> {
+    if let Some(rows) = &msg.components {
+        for row in rows {
+             if let Some(comps) = &row.components {
+                 for comp in comps {
+                     if comp.r#type == 3 { // Select Menu
+                          if let Some(opts) = &comp.options {
+                               let parsed_opts = opts.iter().map(|o| SelectMenuOption {
+                                   label: o.label.clone(),
+                                   value: o.value.clone(),
+                                   description: o.description.clone()
+                               }).collect();
+                               return Some((comp.custom_id.clone().unwrap_or_default(), parsed_opts));
+                          }
+                     }
+                 }
+             }
+        }
+    }
+    None
 }
 
 pub fn parse_generic_list(title: &str, description: &str) -> Vec<GameEntity> {
