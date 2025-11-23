@@ -85,6 +85,22 @@ impl DiscordClient {
         Ok(commands)
     }
 
+    pub async fn get_message(&self, channel_id: &str, message_id: &str) -> Result<crate::discord::types::Message> {
+        let url = format!("https://discord.com/api/v9/channels/{}/messages/{}", channel_id, message_id);
+        let res = self.client.get(&url)
+            .header("Authorization", &self.token)
+            .send()
+            .await?;
+
+        if !res.status().is_success() {
+             let status = res.status();
+             let text = res.text().await?;
+             return Err(anyhow!("Failed to get message: {} - {}", status, text));
+        }
+        let msg: crate::discord::types::Message = res.json().await?;
+        Ok(msg)
+    }
+
     pub async fn send_command(&self, guild_id: &str, channel_id: &str, command: &Value, options: Option<Vec<Value>>) -> Result<()> {
         let url = "https://discord.com/api/v9/interactions";
 
@@ -170,9 +186,21 @@ impl DiscordClient {
         Ok(())
     }
 
-    pub async fn interact_component(&self, guild_id: &str, channel_id: &str, message_id: &str, custom_id: &str) -> Result<()> {
+    pub async fn interact_component(&self, guild_id: &str, channel_id: &str, message_id: &str, custom_id: &str, component_type: Option<u8>, values: Option<Vec<String>>) -> Result<()> {
         let url = "https://discord.com/api/v9/interactions";
         let nonce = chrono::Utc::now().timestamp_millis() * 1000;
+
+        let c_type = component_type.unwrap_or(2);
+        let mut data = json!({
+            "component_type": c_type,
+            "custom_id": custom_id
+        });
+
+        if let Some(v) = values {
+            if let Some(obj) = data.as_object_mut() {
+                obj.insert("values".to_string(), json!(v));
+            }
+        }
 
          let payload = json!({
             "type": 3,
@@ -182,10 +210,7 @@ impl DiscordClient {
             "message_flags": 0,
             "message_id": message_id,
             "application_id": self.application_id,
-            "data": {
-                "component_type": 2,
-                "custom_id": custom_id
-            },
+            "data": data,
             "session_id": "random_session_id_placeholder"
         });
 
