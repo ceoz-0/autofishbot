@@ -10,3 +10,4 @@ pub mod cooldown;
 pub mod explorer;
 pub mod game_data;
 pub mod mechanics;
+pub mod optimizer;
