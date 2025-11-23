@@ -253,7 +253,6 @@ impl Explorer {
                 tokio::time::sleep(Duration::from_secs(3600)).await;
                 self.state = ExplorerState::DiscoveringCommands;
             },
-            _ => {}
         }
     }
 
