@@ -42,7 +42,7 @@ enum BotState {
     Fishing,
     Captcha,
     #[allow(dead_code)] Break,
-    Exploration,
+    #[allow(dead_code)] Exploration,
     Selling,
     Shopping,
 }

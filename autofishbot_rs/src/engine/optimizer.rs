@@ -95,7 +95,7 @@ impl Optimizer {
 
             // Asymmetry Check: Win Time Saved > 3 * Loss Time Recovery
             // Time Saved = Time to grind 'needed' amount
-            let time_saved = needed as f64 / gps;
+            // let time_saved = needed as f64 / gps;
 
             // Loss Time Recovery = Time to grind 'needed' amount (to get back to current_gold)
             // This is 1:1.
@@ -176,7 +176,7 @@ impl Optimizer {
         }
 
         // Evaluate Upgrades (Sample)
-        for upgrade in UPGRADE_DATA.values() {
+        for _upgrade in UPGRADE_DATA.values() {
              // Upgrades complexity: They have levels and costs.
              // We don't track current upgrade level in Profile yet (parsed into Buffs/Charms, but not levels).
              // Skipping detailed upgrade optimization for this step as Profile doesn't have level data.
