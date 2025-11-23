@@ -104,8 +104,12 @@ impl Default for Config {
 
 impl Config {
     pub fn load<P: AsRef<Path>>(path: P) -> Result<Self> {
-        let content = fs::read_to_string(path)?;
-        let config: Config = toml::from_str(&content)?;
+        let content = fs::read_to_string(path.as_ref())?;
+        let mut config: Config = toml::from_str(&content)?;
+
+        // Trim token
+        config.system.user_token = config.system.user_token.trim().to_string();
+
         Ok(config)
     }
 
