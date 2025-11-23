@@ -312,8 +312,7 @@ impl Database {
         Ok(())
     }
 
-    pub async fn save_biome_stats(&self, biome: Biome, stats: &BiomeStats) -> Result<()> {
-        let biome_name = format!("{:?}", biome);
+    pub async fn save_biome_stats(&self, biome: &str, stats: &BiomeStats) -> Result<()> {
         sqlx::query(
             r#"
             INSERT INTO biome_stats (biome_name, total_gold, total_xp, total_catches)
@@ -324,7 +323,7 @@ impl Database {
             total_catches = excluded.total_catches;
             "#
         )
-        .bind(biome_name)
+        .bind(biome)
         .bind(stats.total_gold as i64)
         .bind(stats.total_xp as i64)
         .bind(stats.total_catches as i64)

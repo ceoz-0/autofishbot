@@ -28,7 +28,6 @@ pub struct Bot {
     pub cooldown_manager: Arc<Mutex<CooldownManager>>,
     explorer: Arc<Mutex<Explorer>>,
     optimizer: Arc<Mutex<Optimizer>>,
-    #[allow(dead_code)]
     database: Arc<Database>,
 }
 
@@ -147,7 +146,7 @@ impl Bot {
 
                                          // Save periodically
                                          if stats.total_catches % 50 == 0 {
-                                             let _ = self.database.save_biome_stats(current_biome, stats).await;
+                                             let _ = self.database.save_biome_stats(&format!("{:?}", current_biome), stats).await;
                                          }
                                          info!("Learned: {} gold, {} xp from {} fish in {:?}", total_gold, catch.xp, total_fish, current_biome);
                                      }
@@ -159,14 +158,34 @@ impl Bot {
                     // 2. Optimization / Recommendation
                     {
                         let rod_name = profile_data.rod;
-                        let current_rod = ROD_DATA.values().find(|r| r.name == rod_name).or(ROD_DATA.get(&RodType::Plastic)).unwrap();
-                        let current_boat = BOAT_DATA.get(&BoatType::Rowboat).unwrap(); // Default to Rowboat as Profile doesn't track boat yet
+                        let balance_str = profile_data.balance;
 
-                        let opt = self.optimizer.lock().await;
-                        let recs = opt.solve_next_move(current_rod, current_boat, current_biome);
+                        // Parse balance: "$1,234,567" -> 1234567
+                        let current_balance = balance_str
+                            .replace('$', "")
+                            .replace(',', "")
+                            .trim()
+                            .parse::<u64>()
+                            .unwrap_or(0);
 
-                        if let Some(best) = recs.first() {
-                             info!("ROI Recommendation: {} {} ({:.2}s)", best.action, best.target_name, best.roi_seconds);
+                        let current_rod = ROD_DATA.values().find(|r| r.name == rod_name)
+                             .or_else(|| ROD_DATA.get(&RodType::Plastic));
+
+                        let current_boat = BOAT_DATA.get(&BoatType::Rowboat); // Default to Rowboat as Profile doesn't track boat yet
+
+                        if let (Some(rod), Some(boat)) = (current_rod, current_boat) {
+                            let opt = self.optimizer.lock().await;
+                            let recs = opt.solve_next_move(rod, boat, current_biome);
+
+                            if let Some(best) = recs.first() {
+                                 info!("ROI Recommendation: {} {} ({:.2}s)", best.action, best.target_name, best.roi_seconds);
+
+                                 if current_balance > best.cost {
+                                     info!("READY TO BUY: {} {} for {} (Balance: {})", best.action, best.target_name, best.cost, current_balance);
+                                 }
+                            }
+                        } else {
+                            warn!("Critical: Could not load Game Data for optimization.");
                         }
                     }
 
