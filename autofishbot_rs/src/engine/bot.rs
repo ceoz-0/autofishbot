@@ -9,9 +9,10 @@ use log::{info, warn};
 use std::sync::Arc;
 use tokio::sync::Mutex;
 use std::time::Duration;
+use serde_json::Value;
 
 use crate::tui::app::App;
-use crate::discord::types::ApplicationCommand;
+// use crate::discord::types::ApplicationCommand; // Removed as we use Value now
 
 pub struct Bot {
     config: Config,
@@ -20,7 +21,7 @@ pub struct Bot {
     captcha: Arc<Mutex<Captcha>>,
     app_state: Arc<Mutex<App>>,
     state: BotState,
-    fish_command: Option<ApplicationCommand>,
+    fish_command: Option<Value>, // Changed to Value
     pub cooldown_manager: Arc<Mutex<CooldownManager>>,
     explorer: Arc<Mutex<Explorer>>,
     #[allow(dead_code)]

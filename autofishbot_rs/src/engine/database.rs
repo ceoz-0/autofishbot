@@ -143,12 +143,16 @@ impl Database {
                 full_command_name TEXT UNIQUE NOT NULL, -- e.g. "shop buy"
                 description TEXT,
                 params TEXT,
+                command_structure TEXT, -- JSON of full command definition
                 last_executed DATETIME
             );
             "#,
         )
         .execute(&self.pool)
         .await?;
+
+        // Migration to add command_structure if missing
+        let _ = sqlx::query("ALTER TABLE command_registry ADD COLUMN command_structure TEXT").execute(&self.pool).await;
 
         Ok(())
     }
@@ -254,19 +258,21 @@ impl Database {
         Ok(())
     }
 
-    pub async fn register_command(&self, name: &str, description: &str, params: &str) -> Result<()> {
+    pub async fn register_command(&self, name: &str, description: &str, params: &str, structure: &str) -> Result<()> {
          sqlx::query(
             r#"
-            INSERT INTO command_registry (full_command_name, description, params)
-            VALUES (?, ?, ?)
+            INSERT INTO command_registry (full_command_name, description, params, command_structure)
+            VALUES (?, ?, ?, ?)
             ON CONFLICT(full_command_name) DO UPDATE SET
             description = excluded.description,
-            params = excluded.params;
+            params = excluded.params,
+            command_structure = excluded.command_structure;
             "#,
         )
         .bind(name)
         .bind(description)
         .bind(params)
+        .bind(structure)
         .execute(&self.pool)
         .await?;
         Ok(())

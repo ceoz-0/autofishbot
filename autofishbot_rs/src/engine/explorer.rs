@@ -3,15 +3,16 @@ use log::{info, error, warn};
 use std::time::Duration;
 use crate::discord::client::DiscordClient;
 use crate::engine::database::Database;
-use crate::discord::types::{ApplicationCommand, Message};
+use crate::discord::types::{Message};
 use crate::engine::parser::{self};
+use serde_json::Value;
 
 pub struct Explorer {
     client: Arc<DiscordClient>,
     db: Arc<Database>, // Shared via Arc, not Mutex because Database methods take &self
     guild_id: String,
     channel_id: String,
-    known_commands: Vec<ApplicationCommand>,
+    known_commands: Vec<Value>, // Changed to Value to hold raw JSON
     target_commands: Vec<String>,
     current_command_index: usize,
     state: ExplorerState,
@@ -73,10 +74,14 @@ impl Explorer {
                         self.known_commands = cmds;
                         info!("Discovered {} commands.", self.known_commands.len());
 
-                        // Register all commands in DB
+                        // Register all commands in DB with full raw structure
                         for cmd in &self.known_commands {
-                             let params = serde_json::to_string(&cmd.options).unwrap_or_default();
-                             let _ = self.db.register_command(&cmd.name, &cmd.description, &params).await;
+                             let name = cmd["name"].as_str().unwrap_or("unknown");
+                             let desc = cmd["description"].as_str().unwrap_or("");
+                             let params = serde_json::to_string(&cmd["options"]).unwrap_or_default();
+                             let structure = serde_json::to_string_pretty(&cmd).unwrap_or_default();
+
+                             let _ = self.db.register_command(name, desc, &params, &structure).await;
                         }
 
                         self.state = ExplorerState::ExecutingCommand;
@@ -92,7 +97,7 @@ impl Explorer {
                             self.state = ExplorerState::ExecutingCommand;
                             self.discovery_attempts = 0;
                         } else {
-                            // Exponential backoff: 2^attempts * 2 seconds (e.g., 2, 4, 8, 16...)
+                            // Exponential backoff: 2^attempts * 2 seconds
                             let backoff = 2u64.pow(self.discovery_attempts) * 2;
                             warn!("Retrying discovery in {} seconds...", backoff);
                             tokio::time::sleep(Duration::from_secs(backoff)).await;
@@ -111,23 +116,24 @@ impl Explorer {
                 let cmd_name = &self.target_commands[self.current_command_index];
                 info!("Exploring command: {}", cmd_name);
 
-                // Handle subcommands (e.g. "prestige shop")
+                // Handle subcommands
                 let parts: Vec<&str> = cmd_name.split_whitespace().collect();
                 let main_name = parts[0];
                 let sub_name = if parts.len() > 1 { Some(parts[1]) } else { None };
 
-                if let Some(cmd) = self.known_commands.iter().find(|c| c.name == main_name) {
+                // Find command in known_commands (Vec<Value>)
+                if let Some(cmd) = self.known_commands.iter().find(|c| c["name"] == main_name) {
                      // Prepare options if subcommand
                     let options = if let Some(sub) = sub_name {
-                        // Find subcommand option type
-                         if let Some(opts) = &cmd.options {
-                             if let Some(sub_opt) = opts.iter().find(|o| o.name == sub) {
+                         // Check options array
+                         if let Some(opts) = cmd["options"].as_array() {
+                             if let Some(sub_opt) = opts.iter().find(|o| o["name"] == sub) {
                                   // Construct payload for subcommand
                                   Some(vec![serde_json::json!({
                                       "name": sub,
-                                      "type": sub_opt.r#type,
-                                      // If the subcommand itself has required options, we might fail here.
-                                      // For this task, we assume no arguments needed for shops.
+                                      "type": sub_opt["type"],
+                                      // Deep options usually needed here, but keeping it simple for now
+                                      "options": []
                                   })])
                              } else {
                                  warn!("Subcommand {} not found for {}", sub, main_name);
@@ -137,15 +143,16 @@ impl Explorer {
                              None
                          }
                     } else {
-                        // If no explicit subcommand requested, check if we NEED one
-                        if let Some(opts) = &cmd.options {
-                            // If there are options and they are SUB_COMMAND (1) or SUB_COMMAND_GROUP (2), we must pick one.
-                            if let Some(first_sub) = opts.iter().find(|o| o.r#type == 1 || o.r#type == 2) {
-                                info!("Auto-selecting first subcommand: {} for {}", first_sub.name, main_name);
+                        // Check if we need to auto-select a subcommand
+                        if let Some(opts) = cmd["options"].as_array() {
+                            // Type 1 (SUB_COMMAND) or 2 (SUB_COMMAND_GROUP)
+                            if let Some(first_sub) = opts.iter().find(|o| o["type"] == 1 || o["type"] == 2) {
+                                let sub_n = first_sub["name"].as_str().unwrap_or("unknown");
+                                info!("Auto-selecting first subcommand: {} for {}", sub_n, main_name);
                                 Some(vec![serde_json::json!({
-                                    "name": first_sub.name,
-                                    "type": first_sub.r#type,
-                                    // Recursive subcommands not handled deep enough here, assuming 1 level
+                                    "name": sub_n,
+                                    "type": first_sub["type"],
+                                    "options": []
                                 })])
                             } else {
                                 None
@@ -155,6 +162,7 @@ impl Explorer {
                         }
                     };
 
+                    // Pass the whole cmd Value
                     if let Err(e) = self.client.send_command(&self.guild_id, &self.channel_id, cmd, options).await {
                         error!("Failed to execute {}: {}", cmd_name, e);
                     } else {
@@ -162,36 +170,26 @@ impl Explorer {
                         self.state = ExplorerState::WaitingForResponse;
                     }
                 } else {
-                    warn!("Command {} not found in guild (or fallback list incomplete).", main_name);
+                    warn!("Command {} not found in guild.", main_name);
                     self.advance_command();
                 }
             },
             ExplorerState::WaitingForResponse => {
-                // Check if last message matches what we expect
-                // For simplicity, we just wait a bit and parse whatever appears.
-                // In a real robust system, we'd check interaction IDs.
                 tokio::time::sleep(Duration::from_secs(3)).await;
 
                 if let Some(msg) = last_message {
                     self.parse_and_save(msg).await;
 
-                    // Check for pagination or submenus
                     if self.has_pagination(msg) {
                          self.handle_pagination(msg).await;
-                         // state remains WaitingForResponse (conceptually), but we need to wait for update
-                         // actually handle_pagination clicks the button.
-                         // We should wait again.
                     } else {
                         self.advance_command();
                     }
                 } else {
-                    // No message? Maybe lag.
                     self.advance_command();
                 }
             },
-            ExplorerState::NavigatingPagination => {
-                 // Logic to handle multiple pages
-            },
+            ExplorerState::NavigatingPagination => {},
             ExplorerState::Cooldown => {
                 tokio::time::sleep(Duration::from_secs(3600)).await;
                 self.state = ExplorerState::DiscoveringCommands;
@@ -201,37 +199,29 @@ impl Explorer {
     }
 
     fn load_fallback_commands(&mut self) {
-        // Fallback IDs are dummies, but structure mimics real commands to allow logic to proceed.
-        // We assume typical VF structure.
-        // This allows the explorer to try executing them even if discovery failed.
+        // Fallback IDs are dummies
         let app_id = "574652751745777665".to_string();
 
-        let make_cmd = |name: &str, desc: &str, options: Option<Vec<crate::discord::types::ApplicationCommandOption>>| -> ApplicationCommand {
-             ApplicationCommand {
-                id: "0".to_string(), // Unknown
-                application_id: app_id.clone(),
-                version: "1".to_string(),
-                default_permission: Some(true),
-                default_member_permissions: None,
-                r#type: Some(1),
-                name: name.to_string(),
-                description: desc.to_string(),
-                guild_id: None,
-                options,
-             }
+        let make_cmd = |name: &str, desc: &str, options: Option<Vec<Value>>| -> Value {
+             serde_json::json!({
+                "id": "0",
+                "application_id": app_id,
+                "version": "1",
+                "default_permission": true,
+                "type": 1,
+                "name": name,
+                "description": desc,
+                "options": options.unwrap_or_default()
+             })
         };
 
-        // Shop typically has subcommands: view, buy, etc. But if we just send "shop", maybe it defaults?
-        // Or we need to guess "view". Let's guess "view".
+        // Shop fallback
         let shop_opts = vec![
-            crate::discord::types::ApplicationCommandOption {
-                r#type: 1, // Subcommand
-                name: "view".to_string(),
-                description: "View the shop".to_string(),
-                required: None,
-                choices: None,
-                options: None,
-            }
+            serde_json::json!({
+                "type": 1,
+                "name": "view",
+                "description": "View the shop",
+            })
         ];
 
         self.known_commands = vec![
@@ -242,17 +232,12 @@ impl Explorer {
             make_cmd("daily", "Daily reward", None),
             make_cmd("profile", "View profile", None),
             make_cmd("quests", "View quests", None),
-            // Prestige shop usually is a subcommand of prestige? or /prestige shop?
-            // "prestige" command with "shop" subcommand
              make_cmd("prestige", "Prestige commands", Some(vec![
-                  crate::discord::types::ApplicationCommandOption {
-                    r#type: 1,
-                    name: "shop".to_string(),
-                    description: "Prestige shop".to_string(),
-                    required: None,
-                    choices: None,
-                    options: None,
-                }
+                  serde_json::json!({
+                    "type": 1,
+                    "name": "shop",
+                    "description": "Prestige shop",
+                })
              ])),
         ];
     }
@@ -260,21 +245,15 @@ impl Explorer {
     fn advance_command(&mut self) {
         self.current_command_index += 1;
         self.state = ExplorerState::ExecutingCommand;
-        // Add a small delay between commands
-        // We can't use tokio::sleep here easily if we are inside tick which might be synchronous or we want to return.
-        // But since tick is async, we can.
     }
 
     async fn parse_and_save(&self, msg: &Message) {
-        // Log generic entity first
-        // Message.embeds is Vec<Embed>, it is not Option.
         let embeds = &msg.embeds;
         if !embeds.is_empty() {
             for embed in embeds {
                 let title = embed.title.clone().unwrap_or_default();
                 let desc = embed.description.clone().unwrap_or_default();
 
-                // Try Parse Shop
                 let items = parser::parse_shop_embed(&title, &desc, embed.fields.as_ref());
                 if !items.is_empty() {
                     info!("Found {} items in {}", items.len(), title);
@@ -282,7 +261,6 @@ impl Explorer {
                         let _ = self.db.upsert_shop_item(&item.name, &title, item.price, &item.currency, &item.description, item.stock).await;
                     }
                 } else {
-                    // Fallback: Generic Entity Log
                     let entities = parser::parse_generic_list(&title, &desc);
                      if !entities.is_empty() {
                          info!("Found {} generic entities in {}", entities.len(), title);
@@ -290,7 +268,6 @@ impl Explorer {
                              let _ = self.db.upsert_game_entity(&entity.entity_type, &entity.name, &entity.details).await;
                          }
                      } else {
-                         // Even if parser failed, log the raw text as a "RawEmbed" entity so we don't lose data
                          let _ = self.db.upsert_game_entity("RawEmbed", &title, &desc).await;
                      }
                 }
@@ -303,10 +280,9 @@ impl Explorer {
             for row in components {
                 if let Some(comps) = &row.components {
                     for comp in comps {
-                        // Check for "Next" button (usually label "Next" or emoji arrow)
                         if let Some(label) = &comp.label {
                             if label.contains("Next") || label.contains(">") {
-                                return true; // AND ensure it's not disabled? We don't have disabled field in types yet properly mapped maybe
+                                return true;
                             }
                         }
                     }

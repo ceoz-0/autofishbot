@@ -2,7 +2,6 @@ use anyhow::{Result, anyhow};
 use reqwest::{Client, Proxy};
 use serde_json::{json, Value};
 use crate::config::Config;
-use crate::discord::types::ApplicationCommand;
 use log::error;
 use std::time::Duration;
 use base64::{Engine as _, engine::general_purpose};
@@ -49,12 +48,12 @@ impl DiscordClient {
     }
 
     // Add get_commands_search to find commands by name
-    pub async fn get_command(&self, guild_id: &str, name: &str) -> Result<Option<ApplicationCommand>> {
+    pub async fn get_command(&self, guild_id: &str, name: &str) -> Result<Option<Value>> {
         let commands = self.get_commands(guild_id).await?;
-        Ok(commands.into_iter().find(|c| c.name == name))
+        Ok(commands.into_iter().find(|c| c["name"] == name))
     }
 
-    pub async fn get_commands(&self, guild_id: &str) -> Result<Vec<ApplicationCommand>> {
+    pub async fn get_commands(&self, guild_id: &str) -> Result<Vec<Value>> {
         let url = format!("https://discord.com/api/v9/guilds/{}/application-command-index", guild_id);
         let res = self.client.get(&url)
             .header("Authorization", &self.token)
@@ -78,15 +77,15 @@ impl DiscordClient {
         for cmd_val in commands_array {
             if let Some(app_id) = cmd_val.get("application_id").and_then(|v| v.as_str()) {
                  if app_id == self.application_id {
-                     let cmd: ApplicationCommand = serde_json::from_value(cmd_val.clone())?;
-                     commands.push(cmd);
+                     // Return raw Value to preserve full structure
+                     commands.push(cmd_val.clone());
                  }
             }
         }
         Ok(commands)
     }
 
-    pub async fn send_command(&self, guild_id: &str, channel_id: &str, command: &ApplicationCommand, options: Option<Vec<Value>>) -> Result<()> {
+    pub async fn send_command(&self, guild_id: &str, channel_id: &str, command: &Value, options: Option<Vec<Value>>) -> Result<()> {
         let url = "https://discord.com/api/v9/interactions";
 
         let nonce = chrono::Utc::now().timestamp_millis() * 1000; // Simple nonce
@@ -98,10 +97,10 @@ impl DiscordClient {
             "channel_id": channel_id,
             "session_id": "random_session_id_placeholder", // In real client we might need the session id from gateway
             "data": {
-                "version": command.version,
-                "id": command.id,
-                "name": command.name,
-                "type": command.r#type,
+                "version": command["version"],
+                "id": command["id"],
+                "name": command["name"],
+                "type": command["type"],
                 "options": options.unwrap_or_default(),
                 "application_command": command,
                 "attachments": []
