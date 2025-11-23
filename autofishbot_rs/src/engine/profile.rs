@@ -1,4 +1,17 @@
 use serde::{Deserialize, Serialize};
+use crate::engine::game_data::PET_DATA;
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum CharmType {
+    Marketing,
+    Endurance,
+    Haste,
+    Quantity,
+    Worker,
+    Treasure,
+    Quality,
+    Experience,
+}
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Profile {
@@ -217,5 +230,43 @@ impl Profile {
                 }
             }
         }
+    }
+
+    pub fn get_charm_bonus(&self, charm_type: CharmType) -> f64 {
+        let charm_str = match charm_type {
+            CharmType::Marketing => &self.charms.marketing,
+            CharmType::Endurance => &self.charms.endurance,
+            CharmType::Haste => &self.charms.haste,
+            CharmType::Quantity => &self.charms.quantity,
+            CharmType::Worker => &self.charms.worker,
+            CharmType::Treasure => &self.charms.treasure,
+            CharmType::Quality => &self.charms.quality,
+            CharmType::Experience => &self.charms.experience,
+        };
+
+        // Extract level (Roman or Int)
+        let level_str = charm_str.split_whitespace().last().unwrap_or("0");
+        let level = Self::parse_roman(level_str);
+
+        // Assume 1% per level
+        level as f64 * 0.01
+    }
+
+    fn parse_roman(s: &str) -> u32 {
+        if let Ok(val) = s.parse::<u32>() { return val; }
+        match s {
+            "I" => 1, "II" => 2, "III" => 3, "IV" => 4, "V" => 5,
+            "VI" => 6, "VII" => 7, "VIII" => 8, "IX" => 9, "X" => 10,
+            _ => 0
+        }
+    }
+
+    pub fn get_pet_mults(&self) -> (f64, f64) {
+         for (name, data) in PET_DATA.iter() {
+             if self.pet.contains(name) {
+                 return (data.catch_bonus, data.xp_bonus);
+             }
+         }
+         (0.0, 0.0)
     }
 }

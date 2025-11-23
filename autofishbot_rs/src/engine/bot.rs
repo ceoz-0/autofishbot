@@ -5,17 +5,16 @@ use crate::engine::scheduler::Scheduler;
 use crate::engine::cooldown::CooldownManager;
 use crate::engine::explorer::Explorer;
 use crate::engine::database::Database;
-use crate::engine::optimizer::Optimizer;
+use crate::engine::optimizer::{Optimizer, ActionType, Recommendation};
 use crate::engine::game_data::{RodType, BoatType, Biome, FISH_DATA, ROD_DATA, BOAT_DATA};
 use crate::engine::parser;
 use log::{info, warn};
 use std::sync::Arc;
 use tokio::sync::Mutex;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use serde_json::Value;
 
 use crate::tui::app::App;
-// use crate::discord::types::ApplicationCommand; // Removed as we use Value now
 
 pub struct Bot {
     config: Config,
@@ -24,12 +23,17 @@ pub struct Bot {
     captcha: Arc<Mutex<Captcha>>,
     app_state: Arc<Mutex<App>>,
     state: BotState,
-    fish_command: Option<Value>, // Changed to Value
+    fish_command: Option<Value>,
+    shop_command: Option<Value>,
+    biome_command: Option<Value>,
+    sell_command: Option<Value>,
+    coinflip_command: Option<Value>,
     pub cooldown_manager: Arc<Mutex<CooldownManager>>,
     explorer: Arc<Mutex<Explorer>>,
     optimizer: Arc<Mutex<Optimizer>>,
-    #[allow(dead_code)]
     database: Arc<Database>,
+    last_action: Option<(ActionType, Instant)>,
+    pending_recommendation: Option<Recommendation>,
 }
 
 #[derive(Debug, PartialEq)]
@@ -38,7 +42,9 @@ enum BotState {
     Fishing,
     Captcha,
     #[allow(dead_code)] Break,
-    Exploration, // New State
+    Exploration,
+    Selling,
+    Shopping,
 }
 
 impl Bot {
@@ -67,10 +73,16 @@ impl Bot {
             app_state,
             state: BotState::Idle,
             fish_command: None,
+            shop_command: None,
+            biome_command: None,
+            sell_command: None,
+            coinflip_command: None,
             cooldown_manager,
             explorer,
             optimizer,
             database,
+            last_action: None,
+            pending_recommendation: None,
         }
     }
 
@@ -126,9 +138,16 @@ impl Bot {
                     };
 
                     // Check if we caught something in the last message
-                    if let Some(msg) = last_msg {
+                    if let Some(msg) = &last_msg {
                          for embed in &msg.embeds {
                              if let Some(desc) = &embed.description {
+                                 // Auto-Sell Check
+                                 if desc.to_lowercase().contains("full") {
+                                     info!("Inventory Full detected! Switching to Selling.");
+                                     self.state = BotState::Selling;
+                                     continue; // Break loop iteration to switch state immediately
+                                 }
+
                                  if let Some(catch) = parser::parse_catch_embed(desc) {
                                      // Calculate Gold
                                      let mut total_gold = 0;
@@ -147,7 +166,9 @@ impl Bot {
 
                                          // Save periodically
                                          if stats.total_catches % 50 == 0 {
-                                             let _ = self.database.save_biome_stats(current_biome, stats).await;
+                                             if let Err(e) = self.database.save_biome_stats(&format!("{:?}", current_biome), stats).await {
+                                                 warn!("Failed to save biome stats: {}", e);
+                                             }
                                          }
                                          info!("Learned: {} gold, {} xp from {} fish in {:?}", total_gold, catch.xp, total_fish, current_biome);
                                      }
@@ -156,17 +177,108 @@ impl Bot {
                          }
                     }
 
-                    // 2. Optimization / Recommendation
+                    // 2. Optimization / Recommendation / Autonomy
                     {
-                        let rod_name = profile_data.rod;
-                        let current_rod = ROD_DATA.values().find(|r| r.name == rod_name).or(ROD_DATA.get(&RodType::Plastic)).unwrap();
-                        let current_boat = BOAT_DATA.get(&BoatType::Rowboat).unwrap(); // Default to Rowboat as Profile doesn't track boat yet
+                        let rod_name = profile_data.rod.clone();
+                        let balance_str = profile_data.balance.clone();
 
-                        let opt = self.optimizer.lock().await;
-                        let recs = opt.solve_next_move(current_rod, current_boat, current_biome);
+                        // Parse balance: "$1,234,567" -> 1234567
+                        let current_balance = balance_str
+                            .replace('$', "")
+                            .replace(',', "")
+                            .trim()
+                            .parse::<u64>()
+                            .unwrap_or(0);
 
-                        if let Some(best) = recs.first() {
-                             info!("ROI Recommendation: {} {} ({:.2}s)", best.action, best.target_name, best.roi_seconds);
+                        let current_rod = ROD_DATA.values().find(|r| r.name == rod_name)
+                             .or_else(|| ROD_DATA.get(&RodType::Plastic));
+
+                        let current_boat = BOAT_DATA.get(&BoatType::Rowboat); // Default to Rowboat as Profile doesn't track boat yet
+
+                        if let (Some(rod), Some(boat)) = (current_rod, current_boat) {
+                            let opt = self.optimizer.lock().await;
+
+                            let current_gps = opt.calculate_metrics(rod, boat, current_biome, &profile_data);
+                            let recs = opt.solve_next_move(rod, boat, current_biome, &profile_data, current_balance);
+
+                            if let Some(best) = recs.first() {
+                                 // Update Strategy Info
+                                 {
+                                     let mut app = self.app_state.lock().await;
+                                     app.strategy.current_goal = format!("{} ({:?})", best.target_name, best.action);
+                                     app.strategy.current_gps = format!("${:.2}/s", current_gps);
+                                     app.strategy.progress = format!("{} / {} ({:.1}%)",
+                                         current_balance, best.cost,
+                                         if best.cost > 0 { (current_balance as f64 / best.cost as f64) * 100.0 } else { 100.0 }
+                                     );
+                                     app.strategy.est_time = format!("{:.1} mins", best.roi_seconds / 60.0);
+                                 }
+
+                                 info!("ROI Recommendation: {:?} {} ({:.2}s)", best.action, best.target_name, best.roi_seconds);
+
+                                 let now = Instant::now();
+                                 let is_repeat = if let Some((last_type, last_time)) = &self.last_action {
+                                     // For Coinflip, we assume 'action' enum variant equality checks variants.
+                                     // But Coinflip has data. PartialEq on enum compares data too.
+                                     // So if amount is different, it's not repeat. Good.
+                                     *last_type == best.action && now.duration_since(*last_time) < Duration::from_secs(15)
+                                 } else {
+                                     false
+                                 };
+
+                                 // Autonomy Check
+                                 if !is_repeat {
+                                     let guild_id = self.config.system.guild_id.to_string();
+                                     let channel_id = self.config.system.channel_id.to_string();
+
+                                     match &best.action {
+                                         ActionType::BuyRod | ActionType::BuyBoat if current_balance >= best.cost => {
+                                             info!("AUTONOMOUS ACTION: Transitioning to Shopping for {}", best.target_name);
+                                             self.pending_recommendation = Some(best.clone());
+                                             self.state = BotState::Shopping;
+                                             continue; // Switch state
+                                         },
+                                         ActionType::Travel => {
+                                             info!("AUTONOMOUS ACTION: Traveling to {}", best.target_name);
+                                             if self.biome_command.is_none() {
+                                                 self.biome_command = self.client.get_command(&guild_id, "biome").await.unwrap_or(None);
+                                             }
+                                             if let Some(cmd) = &self.biome_command {
+                                                 let options = vec![
+                                                     serde_json::json!({ "name": "biome", "value": best.target_name })
+                                                 ];
+                                                 let _ = self.client.send_command(&guild_id, &channel_id, cmd, Some(options)).await;
+                                                 self.last_action = Some((ActionType::Travel, now));
+
+                                                 {
+                                                     let mut app = self.app_state.lock().await;
+                                                     app.profile.biome = best.target_name.clone();
+                                                 }
+                                                 tokio::time::sleep(Duration::from_secs(3)).await;
+                                             }
+                                         },
+                                         ActionType::Coinflip { amount, .. } if self.config.automation.danger_mode => {
+                                             info!("AUTONOMOUS ACTION: Coinflip {} for {}", amount, best.target_name);
+                                             if self.coinflip_command.is_none() {
+                                                  self.coinflip_command = self.client.get_command(&guild_id, "coinflip").await.unwrap_or(None);
+                                             }
+                                             if let Some(cmd) = &self.coinflip_command {
+                                                 // /coinflip [amount] heads
+                                                 let options = vec![
+                                                     serde_json::json!({ "name": "amount", "value": amount }),
+                                                     serde_json::json!({ "name": "side", "value": "heads" })
+                                                 ];
+                                                 let _ = self.client.send_command(&guild_id, &channel_id, cmd, Some(options)).await;
+                                                 self.last_action = Some((best.action.clone(), now));
+                                                 tokio::time::sleep(Duration::from_secs(5)).await;
+                                             }
+                                         },
+                                         _ => {}
+                                     }
+                                 }
+                            }
+                        } else {
+                            warn!("Critical: Could not load Game Data for optimization.");
                         }
                     }
 
@@ -183,12 +295,9 @@ impl Bot {
                     if self.fish_command.is_none() {
                         match self.client.get_command(&guild_id, "fish").await {
                             Ok(Some(cmd)) => {
-                                info!("Found fish command: {:?}", cmd);
                                 self.fish_command = Some(cmd);
                             },
-                            Ok(None) => {
-                                log::error!("Could not find 'fish' command in guild");
-                            },
+                            Ok(None) => {},
                             Err(e) => {
                                 log::error!("Failed to fetch commands: {}", e);
                             }
@@ -210,8 +319,69 @@ impl Bot {
                     info!("Sleeping for {:.2}s", sleep_duration.as_secs_f64());
                     tokio::time::sleep(sleep_duration).await;
                 },
+                BotState::Selling => {
+                    info!("Performing Auto-Sell...");
+                    let guild_id = self.config.system.guild_id.to_string();
+                    let channel_id = self.config.system.channel_id.to_string();
+
+                    if self.sell_command.is_none() {
+                         self.sell_command = self.client.get_command(&guild_id, "sell").await.unwrap_or(None);
+                    }
+                    if let Some(cmd) = &self.sell_command {
+                         let _ = self.client.send_command(&guild_id, &channel_id, cmd, None).await;
+                    }
+                    tokio::time::sleep(Duration::from_secs(5)).await;
+                    self.state = BotState::Fishing;
+                },
+                BotState::Shopping => {
+                     let guild_id = self.config.system.guild_id.to_string();
+                     let channel_id = self.config.system.channel_id.to_string();
+                     let now = Instant::now();
+
+                     if let Some(rec) = &self.pending_recommendation {
+                          info!("Shopping: Executing {:?}", rec.action);
+
+                          if self.shop_command.is_none() {
+                               self.shop_command = self.client.get_command(&guild_id, "shop").await.unwrap_or(None);
+                          }
+
+                          if let Some(cmd) = &self.shop_command {
+                               match &rec.action {
+                                   ActionType::BuyRod => {
+                                       let options = vec![
+                                           serde_json::json!({
+                                               "name": "buy",
+                                               "type": 1,
+                                               "options": [
+                                                   { "name": "rod", "value": rec.target_name }
+                                               ]
+                                           })
+                                       ];
+                                       let _ = self.client.send_command(&guild_id, &channel_id, cmd, Some(options)).await;
+                                       self.last_action = Some((ActionType::BuyRod, now));
+                                   },
+                                   ActionType::BuyBoat => {
+                                       let options = vec![
+                                           serde_json::json!({
+                                               "name": "buy",
+                                               "type": 1,
+                                               "options": [
+                                                   { "name": "boat", "value": rec.target_name }
+                                               ]
+                                           })
+                                       ];
+                                       let _ = self.client.send_command(&guild_id, &channel_id, cmd, Some(options)).await;
+                                       self.last_action = Some((ActionType::BuyBoat, now));
+                                   },
+                                   _ => {}
+                               }
+                          }
+                     }
+                     self.pending_recommendation = None;
+                     tokio::time::sleep(Duration::from_secs(5)).await;
+                     self.state = BotState::Fishing;
+                },
                 BotState::Exploration => {
-                    // FIX: We need to access the last full message.
                     let last_msg_obj = {
                          let app = self.app_state.lock().await;
                          app.last_message_object.clone()

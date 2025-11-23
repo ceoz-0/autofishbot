@@ -77,18 +77,21 @@ fn draw_dashboard(f: &mut Frame, app: &App, area: Rect) {
         .constraints([Constraint::Percentage(40), Constraint::Percentage(60)].as_ref())
         .split(chunks[0]);
 
-    // Stats
+    // Agent Brain (Strategy + Stats)
     let stats_block = Block::default()
         .borders(Borders::ALL)
         .border_type(BorderType::Rounded)
-        .title(" Statistics ")
+        .title(" Agent Brain ")
         .style(Style::default().fg(Color::Magenta));
 
     let stats_text = vec![
+        Line::from(vec![Span::styled("Strategy:    ", Style::default().fg(Color::Cyan)), Span::raw(&app.strategy.current_goal)]),
+        Line::from(vec![Span::styled("Progress:    ", Style::default().fg(Color::Yellow)), Span::raw(&app.strategy.progress)]),
+        Line::from(vec![Span::styled("Est. Time:   ", Style::default().fg(Color::Red)), Span::raw(&app.strategy.est_time)]),
+        Line::from(vec![Span::styled("GPS:         ", Style::default().fg(Color::Green)), Span::raw(&app.strategy.current_gps)]),
+        Line::from(""),
         Line::from(vec![Span::styled("Fish Caught: ", Style::default().fg(Color::Blue)), Span::raw(app.stats.fish_caught.to_string())]),
-        Line::from(vec![Span::styled("Money Earned: ", Style::default().fg(Color::Yellow)), Span::raw(format!("${}", app.stats.money_earned))]),
-        Line::from(vec![Span::styled("Captchas:    ", Style::default().fg(Color::Red)), Span::raw(app.stats.captchas_solved.to_string())]),
-        Line::from(vec![Span::styled("Runtime:     ", Style::default().fg(Color::Green)), Span::raw(&app.stats.runtime)]),
+        Line::from(vec![Span::styled("Runtime:     ", Style::default().fg(Color::White)), Span::raw(&app.stats.runtime)]),
     ];
     let stats_p = Paragraph::new(stats_text).block(stats_block).style(Style::default().fg(Color::White));
     f.render_widget(stats_p, left_chunks[0]);
@@ -189,6 +192,7 @@ fn draw_config(f: &mut Frame, app: &App, area: Rect) {
          Line::from(vec![Span::styled("Channel ID: ", Style::default().fg(Color::Yellow)), Span::raw(app.config.system.channel_id.to_string())]),
          Line::from(vec![Span::styled("More Fish:  ", Style::default().fg(Color::Green)), Span::raw(app.config.automation.more_fish.to_string())]),
          Line::from(vec![Span::styled("Auto Daily: ", Style::default().fg(Color::Green)), Span::raw(app.config.automation.auto_daily.to_string())]),
+         Line::from(vec![Span::styled("Danger Mode:", Style::default().fg(Color::Red)), Span::raw(app.config.automation.danger_mode.to_string())]),
      ];
      let p = Paragraph::new(text).block(config_block);
      f.render_widget(p, area);

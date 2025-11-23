@@ -2,6 +2,14 @@ use crate::config::Config;
 use crate::engine::profile::Profile;
 use crate::discord::types::Message;
 
+#[derive(Debug, Clone, Default)]
+pub struct StrategyInfo {
+    pub current_goal: String,
+    pub progress: String,
+    pub est_time: String,
+    pub current_gps: String,
+}
+
 pub struct App {
     pub config: Config,
     pub tabs: Vec<String>,
@@ -14,6 +22,7 @@ pub struct App {
     pub last_message: String,
     pub last_message_object: Option<Message>, // Store full message object for parsers
     pub should_quit: bool,
+    pub strategy: StrategyInfo,
 }
 
 pub struct Stats {
@@ -42,6 +51,7 @@ impl App {
             last_message: String::new(),
             last_message_object: None,
             should_quit: false,
+            strategy: StrategyInfo::default(),
         }
     }
 

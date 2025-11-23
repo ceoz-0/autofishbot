@@ -46,6 +46,8 @@ pub struct AutomationConfig {
     pub auto_buy_baits: bool,
     pub auto_sell: bool,
     pub auto_update_inventory: bool,
+    #[serde(default)]
+    pub danger_mode: bool,
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
@@ -90,6 +92,7 @@ impl Default for Config {
                 auto_buy_baits: false,
                 auto_sell: true,
                 auto_update_inventory: false,
+                danger_mode: false,
             },
             menu: MenuConfig {
                 compact_mode: false,

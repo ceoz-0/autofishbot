@@ -170,6 +170,13 @@ pub struct Upgrade {
     pub description: &'static str,
 }
 
+#[derive(Debug, Clone)]
+pub struct Pet {
+    pub name: &'static str,
+    pub catch_bonus: f64,
+    pub xp_bonus: f64,
+}
+
 // --- Data Loading ---
 
 lazy_static! {
@@ -367,6 +374,14 @@ lazy_static! {
         m.insert("Fishing Frenzy", Upgrade { name: "Fishing Frenzy", max_level: 5, max_cost: 1050, currency: UpgradeCurrency::Hooks, description: "Increases Worker fish speed." });
         m.insert("Duplicator 2.0", Upgrade { name: "Duplicator 2.0", max_level: 10, max_cost: 1185, currency: UpgradeCurrency::Hooks, description: "Increases Duplication chance." });
 
+        m
+    };
+
+    pub static ref PET_DATA: HashMap<&'static str, Pet> = {
+        let mut m = HashMap::new();
+        m.insert("Dolphin", Pet { name: "Dolphin", catch_bonus: 0.05, xp_bonus: 0.10 });
+        m.insert("Puffer", Pet { name: "Puffer", catch_bonus: 0.10, xp_bonus: 0.0 });
+        m.insert("Shark", Pet { name: "Shark", catch_bonus: 0.15, xp_bonus: 0.05 });
         m
     };
 }
