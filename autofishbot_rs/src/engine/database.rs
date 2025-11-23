@@ -1,9 +1,12 @@
-use sqlx::{sqlite::{SqliteConnectOptions, SqlitePoolOptions, SqliteJournalMode}, Pool, Sqlite};
+use sqlx::{sqlite::{SqliteConnectOptions, SqlitePoolOptions, SqliteJournalMode}, Pool, Sqlite, Row};
 use anyhow::Result;
 use std::path::Path;
 use tokio::fs;
 use std::str::FromStr;
 use log::info;
+use crate::engine::game_data::Biome;
+use crate::engine::optimizer::BiomeStats;
+use std::collections::HashMap;
 
 pub struct Database {
     pub pool: Pool<Sqlite>,
@@ -157,6 +160,20 @@ impl Database {
         // Migration to add command_structure if missing
         let _ = sqlx::query("ALTER TABLE command_registry ADD COLUMN command_structure TEXT").execute(&self.pool).await;
 
+        // Biome Stats: Persistent learning for Optimizer
+        sqlx::query(
+            r#"
+            CREATE TABLE IF NOT EXISTS biome_stats (
+                biome_name TEXT PRIMARY KEY,
+                total_gold INTEGER,
+                total_xp INTEGER,
+                total_catches INTEGER
+            );
+            "#,
+        )
+        .execute(&self.pool)
+        .await?;
+
         Ok(())
     }
 
@@ -293,5 +310,65 @@ impl Database {
         .execute(&self.pool)
         .await?;
         Ok(())
+    }
+
+    pub async fn save_biome_stats(&self, biome: Biome, stats: &BiomeStats) -> Result<()> {
+        let biome_name = format!("{:?}", biome);
+        sqlx::query(
+            r#"
+            INSERT INTO biome_stats (biome_name, total_gold, total_xp, total_catches)
+            VALUES (?, ?, ?, ?)
+            ON CONFLICT(biome_name) DO UPDATE SET
+            total_gold = excluded.total_gold,
+            total_xp = excluded.total_xp,
+            total_catches = excluded.total_catches;
+            "#
+        )
+        .bind(biome_name)
+        .bind(stats.total_gold as i64)
+        .bind(stats.total_xp as i64)
+        .bind(stats.total_catches as i64)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    pub async fn load_biome_stats(&self) -> Result<HashMap<Biome, BiomeStats>> {
+        let rows = sqlx::query("SELECT biome_name, total_gold, total_xp, total_catches FROM biome_stats")
+            .fetch_all(&self.pool)
+            .await?;
+
+        let mut map = HashMap::new();
+        for row in rows {
+            let name: String = row.get("biome_name");
+            let biome = match name.as_str() {
+                "River" => Biome::River,
+                "Volcanic" => Biome::Volcanic,
+                "Ocean" => Biome::Ocean,
+                "Sky" => Biome::Sky,
+                "Space" => Biome::Space,
+                "Alien" => Biome::Alien,
+                _ => continue,
+            };
+
+            let total_catches: i64 = row.get("total_catches");
+            let total_gold: i64 = row.get("total_gold");
+            let total_xp: i64 = row.get("total_xp");
+
+            let mut stats = BiomeStats {
+                total_catches: total_catches as u64,
+                total_gold: total_gold as u64,
+                total_xp: total_xp as u64,
+                avg_gold_per_fish: 0.0,
+                avg_xp_per_fish: 0.0,
+            };
+
+            if stats.total_catches > 0 {
+                stats.avg_gold_per_fish = stats.total_gold as f64 / stats.total_catches as f64;
+                stats.avg_xp_per_fish = stats.total_xp as f64 / stats.total_catches as f64;
+            }
+            map.insert(biome, stats);
+        }
+        Ok(map)
     }
 }

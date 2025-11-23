@@ -5,6 +5,9 @@ use crate::engine::scheduler::Scheduler;
 use crate::engine::cooldown::CooldownManager;
 use crate::engine::explorer::Explorer;
 use crate::engine::database::Database;
+use crate::engine::optimizer::Optimizer;
+use crate::engine::game_data::{RodType, BoatType, Biome, FISH_DATA, ROD_DATA, BOAT_DATA};
+use crate::engine::parser;
 use log::{info, warn};
 use std::sync::Arc;
 use tokio::sync::Mutex;
@@ -24,6 +27,7 @@ pub struct Bot {
     fish_command: Option<Value>, // Changed to Value
     pub cooldown_manager: Arc<Mutex<CooldownManager>>,
     explorer: Arc<Mutex<Explorer>>,
+    optimizer: Arc<Mutex<Optimizer>>,
     #[allow(dead_code)]
     database: Arc<Database>,
 }
@@ -48,6 +52,13 @@ impl Bot {
         let channel_id = config.system.channel_id.to_string();
         let explorer = Arc::new(Mutex::new(Explorer::new(client.clone(), database.clone(), guild_id, channel_id)));
 
+        // Initialize Optimizer
+        let mut optimizer = Optimizer::new();
+        if let Ok(stats) = database.load_biome_stats().await {
+            optimizer.biome_knowledge = stats;
+        }
+        let optimizer = Arc::new(Mutex::new(optimizer));
+
         Self {
             config,
             client,
@@ -58,6 +69,7 @@ impl Bot {
             fish_command: None,
             cooldown_manager,
             explorer,
+            optimizer,
             database,
         }
     }
@@ -80,14 +92,9 @@ impl Bot {
                 continue;
             }
 
-            // Simple Logic: If running, default to Exploration for this test
-            // In real app, we might toggle between Fishing and Exploration
+            // Simple Logic: If running, default to Fishing
             if self.state == BotState::Idle {
-                self.state = BotState::Exploration;
-                {
-                    let mut explorer = self.explorer.lock().await;
-                    explorer.start().await;
-                }
+                self.state = BotState::Fishing;
             }
 
             // Check Captcha
@@ -103,6 +110,66 @@ impl Bot {
 
             match self.state {
                 BotState::Fishing => {
+                    // 1. Analyze previous state / message
+                    let (last_msg, profile_data) = {
+                        let app = self.app_state.lock().await;
+                        (app.last_message_object.clone(), app.profile.clone())
+                    };
+
+                    let current_biome = match profile_data.biome.as_str() {
+                        "Volcanic" => Biome::Volcanic,
+                        "Ocean" => Biome::Ocean,
+                        "Sky" => Biome::Sky,
+                        "Space" => Biome::Space,
+                        "Alien" => Biome::Alien,
+                        _ => Biome::River,
+                    };
+
+                    // Check if we caught something in the last message
+                    if let Some(msg) = last_msg {
+                         for embed in &msg.embeds {
+                             if let Some(desc) = &embed.description {
+                                 if let Some(catch) = parser::parse_catch_embed(desc) {
+                                     // Calculate Gold
+                                     let mut total_gold = 0;
+                                     let mut total_fish = 0;
+                                     for (fish_name, count) in &catch.fish {
+                                         let price = FISH_DATA.get(fish_name.as_str()).map(|f| f.price).unwrap_or(0);
+                                         total_gold += price * (*count as u64);
+                                         total_fish += *count as u64;
+                                     }
+
+                                     // Update Optimizer
+                                     if total_fish > 0 {
+                                         let mut opt = self.optimizer.lock().await;
+                                         let stats = opt.biome_knowledge.entry(current_biome).or_default();
+                                         stats.update(total_gold, catch.xp as u64, total_fish);
+
+                                         // Save periodically
+                                         if stats.total_catches % 50 == 0 {
+                                             let _ = self.database.save_biome_stats(current_biome, stats).await;
+                                         }
+                                         info!("Learned: {} gold, {} xp from {} fish in {:?}", total_gold, catch.xp, total_fish, current_biome);
+                                     }
+                                 }
+                             }
+                         }
+                    }
+
+                    // 2. Optimization / Recommendation
+                    {
+                        let rod_name = profile_data.rod;
+                        let current_rod = ROD_DATA.values().find(|r| r.name == rod_name).or(ROD_DATA.get(&RodType::Plastic)).unwrap();
+                        let current_boat = BOAT_DATA.get(&BoatType::Rowboat).unwrap(); // Default to Rowboat as Profile doesn't track boat yet
+
+                        let opt = self.optimizer.lock().await;
+                        let recs = opt.solve_next_move(current_rod, current_boat, current_biome);
+
+                        if let Some(best) = recs.first() {
+                             info!("ROI Recommendation: {} {} ({:.2}s)", best.action, best.target_name, best.roi_seconds);
+                        }
+                    }
+
                     // Perform fishing action
                     info!("Fishing...");
                     {
