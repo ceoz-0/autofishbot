@@ -48,11 +48,17 @@ async fn main() -> Result<()> {
     let (gateway_tx, mut gateway_rx) = tokio::sync::mpsc::channel::<GatewayPayload>(100);
 
     // Gateway
-    let gateway = Gateway::new(config.clone(), gateway_tx);
+    let mut gateway = Gateway::new(config.clone(), gateway_tx);
     let _gateway_handle = tokio::spawn(async move {
         println!("Starting Gateway connection...");
-        if let Err(e) = gateway.run_loop().await {
-            eprintln!("Gateway error: {}", e);
+        loop {
+            if let Err(e) = gateway.run().await {
+                eprintln!("Gateway error: {}", e);
+                tokio::time::sleep(Duration::from_secs(5)).await;
+            } else {
+                // Reconnect immediately on clean exit (reconnect opcode)
+                tokio::time::sleep(Duration::from_millis(500)).await;
+            }
         }
     });
 
