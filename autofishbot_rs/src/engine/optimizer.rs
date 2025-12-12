@@ -1,5 +1,5 @@
 use std::collections::HashMap;
-use crate::engine::game_data::{Rod, Boat, Biome, ROD_DATA, BOAT_DATA, BIOME_DATA, UPGRADE_DATA};
+use crate::engine::game_data::{Rod, Boat, Biome, ROD_DATA, BOAT_DATA, BIOME_DATA, UPGRADE_DATA, UpgradeCurrency};
 use crate::engine::profile::{Profile, CharmType};
 
 #[derive(Debug, Default, Clone)]
@@ -63,6 +63,10 @@ impl Optimizer {
         let sell_bonus = profile.get_charm_bonus(CharmType::Marketing);
         let catch_bonus = profile.get_charm_bonus(CharmType::Quantity);
         let cooldown_bonus = profile.get_charm_bonus(CharmType::Haste);
+
+        // Apply additional bonuses from Profile's parsed buffs if available
+        // Note: Buffs in profile are strings (e.g., "+15%"). Parsing them here or in Profile::get_charm_bonus
+        // We stick to charm_bonus for now as it's cleaner.
 
         let (pet_catch, _pet_xp) = profile.get_pet_mults();
 
@@ -175,11 +179,59 @@ impl Optimizer {
             }
         }
 
-        // Evaluate Upgrades (Sample)
-        for _upgrade in UPGRADE_DATA.values() {
-             // Upgrades complexity: They have levels and costs.
-             // We don't track current upgrade level in Profile yet (parsed into Buffs/Charms, but not levels).
-             // Skipping detailed upgrade optimization for this step as Profile doesn't have level data.
+        // Evaluate Upgrades
+        for upgrade in UPGRADE_DATA.values() {
+             if upgrade.currency != UpgradeCurrency::Money {
+                 continue; // Only optimize Money upgrades for now
+             }
+
+             // Check current status
+             let status = profile.upgrades.get(upgrade.name);
+             let current_level = status.map(|s| s.level).unwrap_or(0);
+
+             if current_level >= upgrade.max_level {
+                 continue;
+             }
+
+             // Estimate cost
+             // If we have parsed next_cost, use it. Otherwise approximate.
+             let cost = if let Some(s) = status {
+                 if let Some(c) = s.next_cost {
+                     c
+                 } else {
+                     // Linear approximation fallback
+                     (upgrade.max_cost / upgrade.max_level as u64) * (current_level as u64 + 1)
+                 }
+             } else {
+                 // Base cost approximation
+                 upgrade.max_cost / upgrade.max_level as u64
+             };
+
+             // Estimate Benefit
+             // We reuse the heuristic logic: Salesman ~5% income boost, others ~1%
+             // This is a simplification but enables the recommendation engine.
+             let estimated_boost = if upgrade.name.contains("Salesman") || upgrade.name.contains("Business") {
+                 0.05
+             } else if upgrade.name.contains("Efficiency") || upgrade.name.contains("Motivation") {
+                 0.02
+             } else {
+                 0.01
+             };
+
+             // Calculate hypothetical GPS with upgrade
+             let new_gps = current_gps * (1.0 + estimated_boost);
+             let gain = new_gps - current_gps;
+
+             if gain > 0.0 {
+                 let roi = cost as f64 / gain;
+
+                 recommendations.push(Recommendation {
+                    action: ActionType::BuyUpgrade,
+                    target_name: upgrade.name.to_string(),
+                    cost,
+                    roi_seconds: roi,
+                 });
+             }
         }
 
         // Evaluate Travel
