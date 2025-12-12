@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use crate::engine::game_data::PET_DATA;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -11,6 +12,13 @@ pub enum CharmType {
     Treasure,
     Quality,
     Experience,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct UpgradeStatus {
+    pub level: u32,
+    pub max_level: u32,
+    pub next_cost: Option<u64>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -28,6 +36,7 @@ pub struct Profile {
     pub charms: Charms,
     pub buffs: Buffs,
     pub quests: Vec<Quest>,
+    pub upgrades: HashMap<String, UpgradeStatus>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -81,6 +90,9 @@ impl Profile {
                 self.parse_buffs(content);
             } else if t.contains("Quests") {
                 self.parse_quests(content);
+            } else if t.contains("Upgrades") || t.contains("Shop") {
+                // "Shop" might contain upgrades too
+                self.parse_upgrades(content);
             }
         }
     }
@@ -226,6 +238,70 @@ impl Profile {
                         objective,
                         progress: "Completed".to_string(),
                         is_completed: true,
+                    });
+                }
+            }
+        }
+    }
+
+    fn parse_upgrades(&mut self, content: &str) {
+        // Example format heuristics:
+        // "**Better Fish** (Lvl 5/21) - $50,000"
+        // "**Salesman** - Lvl 10 - $2,000,000"
+        let clean_content = Self::remove_markdown(content);
+        for line in clean_content.lines() {
+            if line.is_empty() { continue; }
+
+            // Split by dashes or parentheses to find parts
+            // Assume the name is at the start
+            // Looking for "Lvl X" or "Level X"
+            if let Some(lvl_idx) = line.find("Lvl") {
+                let name_part = line[..lvl_idx].trim();
+                let rest = &line[lvl_idx..];
+
+                // Remove trailing punctuation from name
+                let name = name_part.trim_matches(&['-', '(', ')', ' '][..]).to_string();
+
+                // Extract Level
+                let parts: Vec<&str> = rest.split_whitespace().collect();
+                let mut level = 0;
+                let mut max_level = 0;
+
+                // Find the number after "Lvl"
+                for (i, part) in parts.iter().enumerate() {
+                    if part.contains("Lvl") || part.contains("Level") {
+                         if i + 1 < parts.len() {
+                             let lvl_str = parts[i+1].replace(')', "").replace(',', "");
+                             if lvl_str.contains('/') {
+                                 let lvl_parts: Vec<&str> = lvl_str.split('/').collect();
+                                 if let Ok(l) = lvl_parts[0].parse::<u32>() { level = l; }
+                                 if lvl_parts.len() > 1 {
+                                     if let Ok(l) = lvl_parts[1].parse::<u32>() { max_level = l; }
+                                 }
+                             } else {
+                                 if let Ok(l) = lvl_str.parse::<u32>() { level = l; }
+                             }
+                         }
+                    }
+                }
+
+                // Extract Price
+                let mut price = None;
+                if let Some(dollar_idx) = line.find('$') {
+                    let price_str: String = line[dollar_idx+1..].chars()
+                        .take_while(|c| c.is_digit(10) || *c == ',')
+                        .filter(|c| c.is_digit(10))
+                        .collect();
+                    if let Ok(p) = price_str.parse::<u64>() {
+                        price = Some(p);
+                    }
+                }
+
+                if level > 0 {
+                    self.upgrades.insert(name, UpgradeStatus {
+                        level,
+                        max_level,
+                        next_cost: price
                     });
                 }
             }
