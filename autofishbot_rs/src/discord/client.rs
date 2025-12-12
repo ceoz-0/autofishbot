@@ -5,16 +5,19 @@ use crate::config::Config;
 use log::error;
 use std::time::Duration;
 use base64::{Engine as _, engine::general_purpose};
+use std::sync::Arc;
+use tokio::sync::RwLock;
 
 pub struct DiscordClient {
     client: Client,
     _config: Config,
     token: String,
     application_id: String,
+    session_id: Arc<RwLock<Option<String>>>,
 }
 
 impl DiscordClient {
-    pub fn new(config: Config) -> Result<Self> {
+    pub fn new(config: Config, session_id: Arc<RwLock<Option<String>>>) -> Result<Self> {
         let mut client_builder = Client::builder()
             .timeout(Duration::from_secs(15));
 
@@ -44,6 +47,7 @@ impl DiscordClient {
             token: config.system.user_token.clone(),
             _config: config,
             application_id,
+            session_id,
         })
     }
 
@@ -101,17 +105,38 @@ impl DiscordClient {
         Ok(msg)
     }
 
+    fn generate_random_session_id() -> String {
+        use rand::distributions::Alphanumeric;
+        use rand::{thread_rng, Rng};
+        thread_rng()
+            .sample_iter(&Alphanumeric)
+            .take(32)
+            .map(char::from)
+            .collect()
+    }
+
+    async fn get_session_id(&self) -> String {
+        let reader = self.session_id.read().await;
+        if let Some(sid) = &*reader {
+            sid.clone()
+        } else {
+            Self::generate_random_session_id()
+        }
+    }
+
     pub async fn send_command(&self, guild_id: &str, channel_id: &str, command: &Value, options: Option<Vec<Value>>) -> Result<()> {
         let url = "https://discord.com/api/v9/interactions";
 
         let nonce = chrono::Utc::now().timestamp_millis() * 1000; // Simple nonce
+
+        let session_id = self.get_session_id().await;
 
         let payload = json!({
             "type": 2,
             "application_id": self.application_id,
             "guild_id": guild_id,
             "channel_id": channel_id,
-            "session_id": "random_session_id_placeholder", // In real client we might need the session id from gateway
+            "session_id": session_id,
             "data": {
                 "version": command["version"],
                 "id": command["id"],
@@ -123,24 +148,6 @@ impl DiscordClient {
             },
             "nonce": nonce.to_string()
         });
-
-        // Note: The original code uses a random session_id generated locally.
-        // "session.join(choice(ascii_letters + digits) for _ in range(32))"
-        // So we can generate one here if needed or pass it in.
-
-        // Generate random session ID (32 chars)
-        use rand::distributions::Alphanumeric;
-        use rand::{thread_rng, Rng};
-        let session_id: String = thread_rng()
-            .sample_iter(&Alphanumeric)
-            .take(32)
-            .map(char::from)
-            .collect();
-
-        let mut payload_value = payload;
-        if let Some(obj) = payload_value.as_object_mut() {
-            obj.insert("session_id".to_string(), json!(session_id));
-        }
 
         let super_properties = json!({
             "os": "Windows",
@@ -167,7 +174,7 @@ impl DiscordClient {
             .header("x-super-properties", super_properties_base64)
             .header("origin", "https://discord.com")
             .header("referer", "https://discord.com/channels/@me") // Or specific channel
-            .json(&payload_value)
+            .json(&payload)
             .send()
             .await?;
 
@@ -190,6 +197,8 @@ impl DiscordClient {
         let url = "https://discord.com/api/v9/interactions";
         let nonce = chrono::Utc::now().timestamp_millis() * 1000;
 
+        let session_id = self.get_session_id().await;
+
         let c_type = component_type.unwrap_or(2);
         let mut data = json!({
             "component_type": c_type,
@@ -211,7 +220,7 @@ impl DiscordClient {
             "message_id": message_id,
             "application_id": self.application_id,
             "data": data,
-            "session_id": "random_session_id_placeholder"
+            "session_id": session_id
         });
 
         let res = self.client.post(url)

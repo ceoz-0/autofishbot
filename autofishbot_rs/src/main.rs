@@ -9,7 +9,7 @@ use crossterm::{
 };
 use anyhow::Result;
 use std::sync::Arc;
-use tokio::sync::Mutex;
+use tokio::sync::{Mutex, RwLock};
 
 use autofishbot_rs::config::Config;
 use autofishbot_rs::tui::app::App;
@@ -45,14 +45,17 @@ async fn main() -> Result<()> {
 
     let app = Arc::new(Mutex::new(App::new(config.clone())));
 
+    // Shared Session ID state
+    let session_id = Arc::new(RwLock::new(None));
+
     // Discord Client
-    let client = Arc::new(DiscordClient::new(config.clone())?);
+    let client = Arc::new(DiscordClient::new(config.clone(), session_id.clone())?);
 
     // Gateway event channel
     let (gateway_tx, mut gateway_rx) = tokio::sync::mpsc::channel::<GatewayPayload>(100);
 
     // Gateway
-    let gateway = Gateway::new(config.clone(), gateway_tx);
+    let gateway = Gateway::new(config.clone(), gateway_tx, session_id.clone());
     let _gateway_handle = tokio::spawn(async move {
         if let Err(e) = gateway.run_loop().await {
             eprintln!("Gateway error: {}", e);
