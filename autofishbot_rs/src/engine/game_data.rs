@@ -131,6 +131,7 @@ pub struct BiomeStats {
     pub cooldown_penalty: f64,
     pub catch_rate: f64,
     pub base_cooldown: f64, // Inferred as 3.0 for River
+    pub unlock_cost: u64,
 }
 
 #[derive(Debug, Clone)]
@@ -273,12 +274,12 @@ lazy_static! {
 
     pub static ref BIOME_DATA: HashMap<Biome, BiomeStats> = {
         let mut m = HashMap::new();
-        m.insert(Biome::River, BiomeStats { name: "River", cooldown_penalty: 0.0, catch_rate: 1.0, base_cooldown: 3.0 });
-        m.insert(Biome::Volcanic, BiomeStats { name: "Volcanic", cooldown_penalty: 0.5, catch_rate: 0.60, base_cooldown: 3.0 });
-        m.insert(Biome::Ocean, BiomeStats { name: "Ocean", cooldown_penalty: 1.0, catch_rate: 0.30, base_cooldown: 3.0 });
-        m.insert(Biome::Sky, BiomeStats { name: "Sky", cooldown_penalty: 2.0, catch_rate: 0.12, base_cooldown: 3.0 });
-        m.insert(Biome::Space, BiomeStats { name: "Space", cooldown_penalty: 3.0, catch_rate: 0.065, base_cooldown: 3.0 });
-        m.insert(Biome::Alien, BiomeStats { name: "Alien", cooldown_penalty: 4.0, catch_rate: 0.03, base_cooldown: 3.0 });
+        m.insert(Biome::River, BiomeStats { name: "River", cooldown_penalty: 0.0, catch_rate: 1.0, base_cooldown: 3.0, unlock_cost: 0 });
+        m.insert(Biome::Volcanic, BiomeStats { name: "Volcanic", cooldown_penalty: 0.5, catch_rate: 0.60, base_cooldown: 3.0, unlock_cost: 25_000 });
+        m.insert(Biome::Ocean, BiomeStats { name: "Ocean", cooldown_penalty: 1.0, catch_rate: 0.30, base_cooldown: 3.0, unlock_cost: 250_000 });
+        m.insert(Biome::Sky, BiomeStats { name: "Sky", cooldown_penalty: 2.0, catch_rate: 0.12, base_cooldown: 3.0, unlock_cost: 1_000_000 });
+        m.insert(Biome::Space, BiomeStats { name: "Space", cooldown_penalty: 3.0, catch_rate: 0.065, base_cooldown: 3.0, unlock_cost: 5_000_000 });
+        m.insert(Biome::Alien, BiomeStats { name: "Alien", cooldown_penalty: 4.0, catch_rate: 0.03, base_cooldown: 3.0, unlock_cost: 25_000_000 });
         m
     };
 
