@@ -18,9 +18,9 @@ lazy_static! {
     // Example: "Current cooldown: **3.5** seconds"
     static ref COOLDOWN_TOTAL_PATTERN: Regex = Regex::new(r"Current cooldown: \*\*([\d\.]+)\*\* seconds").unwrap();
 
-    // Shop Item Pattern: "**Item Name** - $500" or similar
-    // This is a guess, will need refinement based on actual output
-    static ref SHOP_ITEM_PATTERN: Regex = Regex::new(r"\*\*([^\*]+)\*\*\s+-\s+\$([\d,]+)").unwrap();
+    // Shop Item Pattern: "**Item Name** - $500", "**Item Name**: $500", "**Item Name** - **$500**"
+    // Refined to handle colon separators and bold prices
+    static ref SHOP_ITEM_PATTERN: Regex = Regex::new(r"\*\*([^\*]+)\*\*\s*(?:-|:|–)\s*(?:\*\*)?\$([\d,]+)(?:\*\*)?").unwrap();
 }
 
 #[derive(Debug)]
@@ -262,4 +262,60 @@ pub fn parse_generic_list(title: &str, description: &str) -> Vec<GameEntity> {
         });
     }
     entities
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_parse_shop_embed_variations() {
+        let title = "Fish Shop";
+
+        // Variation 1: Existing assumption
+        let desc1 = "**Plastic Rod** - $500\n**Steel Rod** - $1,500";
+        let items1 = parse_shop_embed(title, desc1, None);
+        assert_eq!(items1.len(), 2, "Failed Variation 1");
+        assert_eq!(items1[0].name, "Plastic Rod");
+        assert_eq!(items1[0].price, 500.0);
+        assert_eq!(items1[1].name, "Steel Rod");
+        assert_eq!(items1[1].price, 1500.0);
+
+        // Variation 2: With Emojis and no bold on price
+        let desc2 = "<:rod:123> **Plastic Rod** - $500\n<:rod:123> **Steel Rod** - $1,500";
+        let items2 = parse_shop_embed(title, desc2, None);
+        // This fails with current regex if it strictly expects start of line or specific format
+        // Current regex: r"\*\*([^\*]+)\*\*\s+-\s+\$([\d,]+)"
+        // It doesn't anchor to start, so it might pass if format is " - $".
+
+        // Variation 3: Price in bold
+        let desc3 = "**Plastic Rod** - **$500**";
+        let items3 = parse_shop_embed(title, desc3, None);
+
+        // Variation 4: Colon separator
+        let desc4 = "**Plastic Rod**: $500";
+        let items4 = parse_shop_embed(title, desc4, None);
+
+        // Variation 6: ID prefix
+        let desc6 = "1. **Plastic Rod** - $500";
+        let items6 = parse_shop_embed(title, desc6, None);
+
+        assert_eq!(items2.len(), 2, "Failed Variation 2");
+        assert_eq!(items2[0].name, "Plastic Rod");
+        assert_eq!(items2[0].price, 500.0);
+        assert_eq!(items2[1].name, "Steel Rod");
+        assert_eq!(items2[1].price, 1500.0);
+
+        assert_eq!(items3.len(), 1, "Failed Variation 3");
+        assert_eq!(items3[0].name, "Plastic Rod");
+        assert_eq!(items3[0].price, 500.0);
+
+        assert_eq!(items4.len(), 1, "Failed Variation 4");
+        assert_eq!(items4[0].name, "Plastic Rod");
+        assert_eq!(items4[0].price, 500.0);
+
+        assert_eq!(items6.len(), 1, "Failed Variation 6");
+        assert_eq!(items6[0].name, "Plastic Rod");
+        assert_eq!(items6[0].price, 500.0);
+    }
 }
