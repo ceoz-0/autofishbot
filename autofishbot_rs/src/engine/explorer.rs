@@ -129,48 +129,11 @@ impl Explorer {
                 // Handle subcommands
                 let parts: Vec<&str> = cmd_name.split_whitespace().collect();
                 let main_name = parts[0];
-                let sub_name = if parts.len() > 1 { Some(parts[1]) } else { None };
 
                 // Find command in known_commands (Vec<Value>)
                 if let Some(cmd) = self.known_commands.iter().find(|c| c["name"] == main_name) {
-                     // Prepare options if subcommand
-                    let options = if let Some(sub) = sub_name {
-                         // Check options array
-                         if let Some(opts) = cmd["options"].as_array() {
-                             if let Some(sub_opt) = opts.iter().find(|o| o["name"] == sub) {
-                                  // Construct payload for subcommand
-                                  Some(vec![serde_json::json!({
-                                      "name": sub,
-                                      "type": sub_opt["type"],
-                                      // Deep options usually needed here, but keeping it simple for now
-                                      "options": []
-                                  })])
-                             } else {
-                                 warn!("Subcommand {} not found for {}", sub, main_name);
-                                 None
-                             }
-                         } else {
-                             None
-                         }
-                    } else {
-                        // Check if we need to auto-select a subcommand
-                        if let Some(opts) = cmd["options"].as_array() {
-                            // Type 1 (SUB_COMMAND) or 2 (SUB_COMMAND_GROUP)
-                            if let Some(first_sub) = opts.iter().find(|o| o["type"] == 1 || o["type"] == 2) {
-                                let sub_n = first_sub["name"].as_str().unwrap_or("unknown");
-                                info!("Auto-selecting first subcommand: {} for {}", sub_n, main_name);
-                                Some(vec![serde_json::json!({
-                                    "name": sub_n,
-                                    "type": first_sub["type"],
-                                    "options": []
-                                })])
-                            } else {
-                                None
-                            }
-                        } else {
-                            None
-                        }
-                    };
+                     // Prepare options (deep structure)
+                    let options = self.build_command_options(&parts[1..], cmd["options"].as_array());
 
                     // Pass the whole cmd Value
                     if let Err(e) = self.client.send_command(&self.guild_id, &self.channel_id, cmd, options).await {
@@ -253,6 +216,55 @@ impl Explorer {
                 tokio::time::sleep(Duration::from_secs(3600)).await;
                 self.state = ExplorerState::DiscoveringCommands;
             },
+        }
+    }
+
+    fn build_command_options(&self, path: &[&str], schema_options: Option<&Vec<Value>>) -> Option<Vec<Value>> {
+        let opts = match schema_options {
+            Some(o) => o,
+            None => return Some(Vec::new()),
+        };
+
+        if let Some(&target) = path.first() {
+            // Explicit path navigation
+            if let Some(option_def) = opts.iter().find(|o| o["name"] == target) {
+                 let sub_options = self.build_command_options(&path[1..], option_def["options"].as_array());
+
+                 if let Some(sub_opts_vec) = sub_options {
+                     Some(vec![serde_json::json!({
+                         "name": target,
+                         "type": option_def["type"],
+                         "options": sub_opts_vec
+                     })])
+                 } else {
+                     None
+                 }
+            } else {
+                warn!("Subcommand/Option '{}' not found.", target);
+                None
+            }
+        } else {
+            // End of explicit path. Check if we need to auto-select a child.
+            // Look for type 1 (SUB_COMMAND) or 2 (SUB_COMMAND_GROUP)
+            if let Some(first_sub) = opts.iter().find(|o| {
+                let t = o["type"].as_u64().unwrap_or(0);
+                t == 1 || t == 2
+            }) {
+                let name = first_sub["name"].as_str().unwrap_or("unknown");
+                info!("Auto-selecting subcommand: {}", name);
+
+                let sub_options = self.build_command_options(&[], first_sub["options"].as_array());
+                let sub_opts_vec = sub_options.unwrap_or_default();
+
+                Some(vec![serde_json::json!({
+                    "name": name,
+                    "type": first_sub["type"],
+                    "options": sub_opts_vec
+                })])
+            } else {
+                // No subcommands to select, we are at leaf (or only have parameters which we ignore for now)
+                Some(Vec::new())
+            }
         }
     }
 
