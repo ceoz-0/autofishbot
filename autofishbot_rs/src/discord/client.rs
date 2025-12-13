@@ -36,8 +36,8 @@ impl DiscordClient {
         }
 
         let client = client_builder.build()?;
-        // Hardcoded Application ID from original code
-        let application_id = "574652751745777665".to_string();
+
+        let application_id = config.system.application_id.to_string();
 
         Ok(Self {
             client,
