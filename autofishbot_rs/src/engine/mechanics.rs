@@ -1,4 +1,6 @@
 use crate::engine::game_data::*;
+use regex::Regex;
+use lazy_static::lazy_static;
 
 // --- Constants & Configuration ---
 
@@ -13,6 +15,10 @@ const VAL_DIAMOND_FISH: f64 = 5000.0;
 const VAL_CHARM: f64 = 10_000.0;
 const VAL_SUPER_CRATE: f64 = 50_000.0;
 const VAL_MONEY_UNIT: f64 = 1.0; // Base value of $1
+
+lazy_static! {
+    static ref BENEFIT_PERCENTAGE_PATTERN: Regex = Regex::new(r"(\d+(\.\d+)?)%").unwrap();
+}
 
 pub struct GameState {
     pub money: u64,
@@ -113,6 +119,50 @@ pub fn get_treasure_ev(tier: TreasureQuality) -> f64 {
 
 // --- Optimization Heuristic ---
 
+/// Parses upgrade description to estimate effective income boost percentage.
+/// Returns a multiplier (e.g. 0.05 for 5% boost).
+fn estimate_upgrade_benefit(upgrade: &Upgrade) -> f64 {
+    // 1. Extract percentage from description
+    let mut percentage = 0.0;
+    if let Some(caps) = BENEFIT_PERCENTAGE_PATTERN.captures(upgrade.description) {
+        if let Some(val_str) = caps.get(1) {
+             if let Ok(val) = val_str.as_str().parse::<f64>() {
+                 percentage = val / 100.0;
+             }
+        }
+    }
+
+    // If no percentage found, check if it's a known non-percentage upgrade or default small value
+    if percentage <= 0.0 {
+        // Fallback or specific logic for flat bonuses
+        return 0.01;
+    }
+
+    // 2. Weight the boost based on type
+    let desc_lower = upgrade.description.to_lowercase();
+    let weight = if desc_lower.contains("sell price") {
+        1.0 // Direct income boost
+    } else if desc_lower.contains("fish quality") {
+        0.8 // Increases average sell price, but not strictly 1:1
+    } else if desc_lower.contains("fish catch") {
+        0.8 // More fish = more money, but limited by cooldown/cast time
+    } else if desc_lower.contains("treasure chance") {
+        0.3 // Treasure is valuable but occasional
+    } else if desc_lower.contains("treasure rewards") || desc_lower.contains("treasure quality") {
+        0.2 // Higher value treasure
+    } else if desc_lower.contains("xp gain") {
+        0.1 // Helps unlocking biomes, but low direct income value
+    } else if desc_lower.contains("consuming bait") {
+        0.1 // Saves costs
+    } else if desc_lower.contains("daily rewards") {
+        0.05 // Minor bonus
+    } else {
+        0.5 // Default weight for unknown positive effects
+    };
+
+    percentage * weight
+}
+
 /// Skeleton function to calculate the next best action.
 /// Compares marginal utility of upgrades vs biome unlocks.
 pub fn calculate_next_best_action(state: &GameState) -> Action {
@@ -132,13 +182,8 @@ pub fn calculate_next_best_action(state: &GameState) -> Action {
             // Estimate current cost (Simplified: MaxCost / MaxLevel for rough average)
             let avg_cost = upgrade.max_cost as f64 / upgrade.max_level as f64;
 
-            // Estimate benefit (Simplified: Assume 5% income boost for Salesman-like, or small constant)
-            // Real implementation would parse 'description' or have specific logic per upgrade type.
-            let estimated_boost = if upgrade.name.contains("Salesman") {
-                0.05
-            } else {
-                0.01
-            };
+            // Estimate benefit using parsed description logic
+            let estimated_boost = estimate_upgrade_benefit(upgrade);
 
             let new_income = current_income * (1.0 + estimated_boost);
             let marginal_utility = (new_income - current_income) / avg_cost;
