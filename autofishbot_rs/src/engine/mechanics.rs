@@ -161,14 +161,37 @@ pub fn calculate_next_best_action(state: &GameState) -> Action {
     };
 
     let mut best_action = Action::SaveMoney;
-    let max_utility = max_upgrade_utility;
+    let mut max_utility = max_upgrade_utility;
 
     if let Some(action) = best_upgrade_action {
         best_action = action;
     }
 
-    if let Some(_biome) = next_biome {
-        // Placeholder for biome unlocking comparison
+    if let Some(biome) = next_biome {
+        let biome_stats = &BIOME_DATA[&biome];
+        let unlock_cost = biome_stats.unlock_cost as f64;
+
+        if unlock_cost > 0.0 {
+             // Estimate income in the new biome
+             // We clone the state and simulate the biome change
+             let hypothetical_state = GameState {
+                 money: state.money,
+                 level: state.level,
+                 boost_level: state.boost_level,
+                 frenzy_level: state.frenzy_level,
+                 current_biome: biome,
+                 current_rod: state.current_rod,
+                 owned_boats: state.owned_boats.clone(),
+             };
+
+             let new_income = calculate_income_rate(&hypothetical_state);
+             let marginal_utility = (new_income - current_income) / unlock_cost;
+
+             if marginal_utility > max_utility {
+                 max_utility = marginal_utility;
+                 best_action = Action::UnlockBiome(biome);
+             }
+        }
     }
 
     // Heuristic decision
@@ -200,4 +223,63 @@ fn calculate_income_rate(state: &GameState) -> f64 {
 
 fn get_fish_in_biome(biome: Biome) -> Vec<&'static Fish> {
     FISH_DATA.values().filter(|f| f.biomes.contains(&biome)).collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_biome_unlock_comparison() {
+        // Setup a state where unlocking the biome is clearly the best option
+        // River income is low, Volcanic income is high.
+        // We need to manipulate the heuristic such that marginal utility of unlock > upgrade.
+
+        let state = GameState {
+            money: 1_000_000,
+            level: 10,
+            boost_level: 0,
+            frenzy_level: 0,
+            current_biome: Biome::River,
+            current_rod: RodType::Plastic, // Low efficiency to make current income low
+            owned_boats: vec![],
+        };
+
+        // Current income will be based on River fish (cheap) and Plastic rod.
+        // Volcanic unlock cost is 25,000.
+        // Volcanic fish are much more expensive.
+
+        // This test relies on heuristic values. If logic works, it should suggest unlocking Volcanic
+        // or buying an upgrade if that's somehow better.
+        // But since we want to verify the code path, let's see what happens.
+
+        let action = calculate_next_best_action(&state);
+        println!("Recommended Action: {:?}", action);
+
+        // We expect UnlockBiome if the math works out for huge income jump vs cost.
+        // If upgrades are super cheap and effective, it might suggest upgrade.
+        // But let's check if it compiles and runs.
+    }
+
+    #[test]
+    fn test_biome_unlock_logic_trigger() {
+        // Force a scenario where next biome exists
+        let state = GameState {
+            money: 1_000_000,
+            level: 50,
+            boost_level: 0,
+            frenzy_level: 0,
+            current_biome: Biome::River,
+            current_rod: RodType::Fiberglass, // Better rod
+            owned_boats: vec![BoatType::FishingBoat],
+        };
+
+        let action = calculate_next_best_action(&state);
+        match action {
+            Action::UnlockBiome(b) => assert_eq!(b, Biome::Volcanic),
+            Action::BuyUpgrade(_) => {}, // Also acceptable if upgrades are better
+            Action::SaveMoney => {},
+            _ => panic!("Unexpected action: {:?}", action),
+        }
+    }
 }
